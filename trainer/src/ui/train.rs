@@ -4,7 +4,7 @@ use eframe::egui::{self, Align, Align2, Layout, Margin, Rect, Rounding, Sense, S
 use holdem_solver::card::{Card, parse_card};
 use holdem_trainer::grading::Grade;
 use holdem_trainer::profile::Mode;
-use holdem_trainer::quiz::{LogEntry, SeatView, fmt_bb};
+use holdem_trainer::quiz::{Feedback, LogEntry, MIN_REACH, SeatView, fmt_bb};
 
 use super::app::{App, Hand, Screen, Session};
 use super::table::{TableView, draw_table};
@@ -76,12 +76,16 @@ struct View {
 }
 
 fn view_of(s: &Session) -> View {
+    // While the feedback is open the header keeps describing the spot that was
+    // answered, not the actions taken after it.
+    let answered = s.feedback.as_ref().map(|a| a.fb.spot.clone());
     match &s.hand {
         Hand::Pre(h) => {
             let cfg = &h.pack.pack.config;
+            let stack = fmt_bb(h.pack.nominal_stack() as f32);
             let title = match s.mode {
-                Mode::PushFold => format!("Push / Fold  ·  {}bb  ·  ante {}bb", fmt_bb(cfg.stack as f32), cfg.ante),
-                _ => format!("Preflop Cash  ·  {}bb deep", fmt_bb(cfg.stack as f32)),
+                Mode::PushFold => format!("Push / Fold  ·  {stack}bb  ·  ante {}bb", cfg.ante),
+                _ => format!("Preflop Cash  ·  {stack}bb deep"),
             };
             let (a, b) = h.cards[h.hero];
             View {
@@ -89,7 +93,7 @@ fn view_of(s: &Session) -> View {
                 board: h.board(),
                 pot: h.pot(),
                 title,
-                spot: h.spot_text(),
+                spot: answered.unwrap_or_else(|| h.spot_text()),
                 story: None,
                 hero_cards: [a, b],
                 hero_hand: h.hero_hand_name(),
@@ -107,7 +111,7 @@ fn view_of(s: &Session) -> View {
                 board: h.display_board(),
                 pot: h.pot(),
                 title: format!("Postflop  ·  {}", holdem_trainer::gen::spot_label(kind)),
-                spot: h.spot_text(),
+                spot: answered.unwrap_or_else(|| h.spot_text()),
                 story: Some(holdem_trainer::gen::spot_story(kind).to_string()),
                 hero_cards: cards,
                 hero_hand: format!("{} {}", holdem_solver::card::card_to_string(cards[0]), holdem_solver::card::card_to_string(cards[1])),
@@ -128,7 +132,6 @@ pub fn show(app: &mut App, ctx: &egui::Context, now: f64) {
     }
     let four = app.profile.settings.four_color_deck;
     let animations = app.profile.settings.animations;
-    let streak = app.profile.streak;
     let s = app.session.as_mut().unwrap();
     let labels = current_labels(s);
     let view = view_of(s);
@@ -156,7 +159,7 @@ pub fn show(app: &mut App, ctx: &egui::Context, now: f64) {
                 session_card(ui, s);
                 ui.add_space(10.0);
                 if let Some(ans) = &s.feedback {
-                    feedback_card(ui, ans, &view, streak, now, animations);
+                    feedback_card(ui, ans, &view, now, animations);
                 } else {
                     spot_card(ui, &view, four);
                 }
@@ -281,11 +284,12 @@ fn session_card(ui: &mut egui::Ui, s: &Session) {
             ("XP", format!("+{}", s.xp), GOLD),
         ];
         if s.mode == Mode::Postflop {
-            items[1] = ("EV lost", format!("{} bb", fmt_bb(s.ev_lost)), FLAME);
+            // The unit goes in the caption: "12.34 bb" would not fit the column.
+            items[1] = ("EV lost (bb)", fmt_bb(s.ev_lost), FLAME);
         }
         ui.columns(items.len(), |cols| {
             for (col, (title, value, color)) in cols.iter_mut().zip(items) {
-                col.label(egui::RichText::new(value).font(theme::bold(20.0)).color(color));
+                col.add(egui::Label::new(egui::RichText::new(value).font(theme::bold(20.0)).color(color)).extend());
                 col.label(egui::RichText::new(title).font(theme::font(12.0)).color(TEXT_FAINT));
             }
         });
@@ -336,7 +340,16 @@ fn spot_card(ui: &mut egui::Ui, view: &View, four: bool) {
     });
 }
 
-fn verdict_text(fb: &holdem_trainer::quiz::Feedback) -> String {
+fn verdict_text(fb: &Feedback) -> String {
+    // Off the solution's line the frequencies mean nothing: speak in EV only.
+    if let (false, Some(evs)) = (fb.freqs_trusted, &fb.evs) {
+        let best = (0..evs.len()).max_by(|&a, &b| evs[a].partial_cmp(&evs[b]).unwrap_or(std::cmp::Ordering::Equal)).unwrap_or(0);
+        return match fb.grade {
+            Grade::Perfect => "Spot on: your play keeps all the EV.".into(),
+            Grade::Good => "Close enough: you give up almost nothing.".into(),
+            _ => format!("{} keeps the most EV here.", fb.actions[best]),
+        };
+    }
     let best = fb
         .freqs
         .iter()
@@ -356,7 +369,7 @@ fn verdict_text(fb: &holdem_trainer::quiz::Feedback) -> String {
     }
 }
 
-fn feedback_card(ui: &mut egui::Ui, ans: &super::app::Answered, view: &View, streak: u32, now: f64, animations: bool) {
+fn feedback_card(ui: &mut egui::Ui, ans: &super::app::Answered, view: &View, now: f64, animations: bool) {
     let fb = &ans.fb;
     let color = theme::grade_color(fb.grade);
     let age = if animations { (now - ans.at) as f32 } else { 10.0 };
@@ -373,13 +386,19 @@ fn feedback_card(ui: &mut egui::Ui, ans: &super::app::Answered, view: &View, str
             ui.painter().text(r.center(), Align2::CENTER_CENTER, theme::grade_icon(fb.grade), theme::bold(19.0 * pop), color);
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new(fb.grade.label()).font(theme::bold(24.0 * pop.min(1.1))).color(color));
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     let shown = (ans.award.xp as f32 * (age / 0.6).min(1.0)).round() as u32;
                     ui.label(egui::RichText::new(format!("+{shown} XP")).font(theme::semibold(15.0)).color(GOLD));
+                    // One extra XP per 5 in a row (grading::xp_for).
+                    let bonus = ans.award.xp.saturating_sub(fb.grade.xp());
+                    if bonus > 0 {
+                        ui.label(egui::RichText::new(format!("incl. +{bonus} streak bonus")).font(theme::font(12.0)).color(TEXT_DIM));
+                    }
+                    let streak = ans.award.streak;
                     if fb.grade.is_correct() && streak > 1 {
                         ui.label(egui::RichText::new(format!("🔥 {streak} in a row")).font(theme::semibold(14.0)).color(FLAME));
-                    } else if fb.grade.breaks_streak() && ans.award.streak == 0 {
-                        ui.label(egui::RichText::new("streak lost").font(theme::font(13.0)).color(TEXT_FAINT));
+                    } else if fb.grade.breaks_streak() && ans.award.streak_before > 0 {
+                        ui.label(egui::RichText::new(format!("streak of {} lost", ans.award.streak_before)).font(theme::font(13.0)).color(FLAME));
                     }
                 });
             });
@@ -395,8 +414,16 @@ fn feedback_card(ui: &mut egui::Ui, ans: &super::app::Answered, view: &View, str
                     .color(theme::mix(color, TEXT, 0.3)),
             );
         }
+        // The hand's result, before the long range grid so it stays in view.
+        if let Some(end) = &view.end {
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(end).font(theme::semibold(14.0)).color(GOLD));
+        }
         ui.add_space(8.0);
         ui.label(egui::RichText::new(format!("Solution with {}", fb.hand)).font(theme::semibold(14.5)).color(TEXT));
+        if !fb.freqs_trusted {
+            ui.label(egui::RichText::new("Your hand is not in the solution's range here: graded on EV only.").font(theme::font(12.5)).color(GOLD));
+        }
         ui.add_space(2.0);
         let styles = styles_for(&fb.actions);
         let w = ui.available_width();
@@ -405,25 +432,33 @@ fn feedback_card(ui: &mut egui::Ui, ans: &super::app::Answered, view: &View, str
             ui.label(egui::RichText::new("EV in big blinds, from this point of the hand.").font(theme::font(11.5)).color(TEXT_FAINT));
         }
 
-        if let Some((grid, class)) = &fb.grid {
+        if let Some(grid) = &fb.grid {
             ui.add_space(10.0);
             ui.label(egui::RichText::new(format!("Whole range: {}", fb.category)).font(theme::semibold(14.5)).color(TEXT));
             ui.add_space(2.0);
             let cell = ((ui.available_width() - 4.0) / 13.0).floor().min(27.0);
-            let resp = widgets::range_grid(ui, grid, &styles, Some(*class), cell);
+            let resp = widgets::range_grid(ui, grid, &styles, cell);
             if let Some(pos) = resp.hover_pos() {
                 let rel = pos - resp.rect.min;
                 let (col, row) = ((rel.x / cell) as usize, (rel.y / cell) as usize);
                 if col < 13 && row < 13 {
                     let c = row * 13 + col;
-                    let mix: Vec<String> = fb
-                        .actions
-                        .iter()
-                        .zip(&grid[c])
-                        .filter(|(_, &f)| f >= 0.005)
-                        .map(|(a, f)| format!("{a}: {:.0}%", 100.0 * f))
-                        .collect();
-                    resp.on_hover_text(format!("{}\n{}", holdem_solver::range::class_name(c), mix.join("\n")));
+                    let name = holdem_solver::range::class_name(c);
+                    let reach = grid.reach[c];
+                    let tip = if reach < MIN_REACH {
+                        format!("{name}\nNot in range: the solution never plays it to this spot.")
+                    } else {
+                        let mix: Vec<String> = fb
+                            .actions
+                            .iter()
+                            .zip(&grid.strategy[c])
+                            .filter(|(_, &f)| f >= 0.005)
+                            .map(|(a, f)| format!("{a}: {:.0}%", 100.0 * f))
+                            .collect();
+                        let gets_here = if reach < 0.995 { format!("\nGets here {:.0}% of the time", 100.0 * reach) } else { String::new() };
+                        format!("{name}{gets_here}\n{}", mix.join("\n"))
+                    };
+                    resp.on_hover_text(tip);
                 }
             }
             ui.horizontal_wrapped(|ui| {
@@ -432,12 +467,17 @@ fn feedback_card(ui: &mut egui::Ui, ans: &super::app::Answered, view: &View, str
                     ui.painter().rect_filled(r, Rounding::same(3.0), act_color(*st));
                     ui.label(egui::RichText::new(label).font(theme::font(12.0)).color(TEXT_DIM));
                 }
+                if grid.reach.iter().any(|&r| r < MIN_REACH) {
+                    let (r, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
+                    ui.painter().rect_filled(r, Rounding::same(3.0), OUT_OF_RANGE);
+                    ui.label(egui::RichText::new("Not in range").font(theme::font(12.0)).color(TEXT_DIM));
+                }
             });
-        }
-
-        if let Some(end) = &view.end {
-            ui.add_space(8.0);
-            ui.label(egui::RichText::new(end).font(theme::medium(14.0)).color(TEXT));
+            if grid.reach.iter().any(|&r| r < 0.995) {
+                ui.label(
+                    egui::RichText::new("Colored height: how often the solution plays each hand to this spot.").font(theme::font(11.5)).color(TEXT_FAINT),
+                );
+            }
         }
     });
 }
@@ -448,6 +488,9 @@ fn log_card(ui: &mut egui::Ui, view: &View, four: bool) {
     }
     widgets::panel_frame(PANEL).show(ui, |ui| {
         ui.set_width(ui.available_width());
+        // One-line rows: the theme's 30px interact height would make each 38px tall.
+        ui.spacing_mut().interact_size.y = 20.0;
+        ui.spacing_mut().item_spacing.y = 3.0;
         widgets::section_title(ui, "Hand history");
         ui.add_space(2.0);
         let mut street = String::new();

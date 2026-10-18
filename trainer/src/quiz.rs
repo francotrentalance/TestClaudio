@@ -24,6 +24,23 @@ pub struct SeatView {
     pub last_action: Option<String>,
 }
 
+/// Below this own reach (the product of the solution's frequencies for the
+/// actions the player took earlier in the hand) the solution never brings the
+/// hand to the node, so its stored frequencies there are untrained noise.
+pub const MIN_REACH: f32 = 0.01;
+
+/// Strategy of every starting-hand class at a preflop decision.
+#[derive(Clone, Debug)]
+pub struct RangeGrid {
+    /// `[class][action]`, 169 classes.
+    pub strategy: Vec<Vec<f32>>,
+    /// `[class]`: probability that the acting player's own earlier actions in
+    /// this hand lead to this node with that class (1.0 at a first decision).
+    /// Below [`MIN_REACH`] the class is not in the range here.
+    pub reach: Vec<f32>,
+    pub hero_class: usize,
+}
+
 /// What the solution does with the hero's hand, and how the choice was graded.
 #[derive(Clone, Debug)]
 pub struct Feedback {
@@ -31,6 +48,10 @@ pub struct Feedback {
     pub chosen: usize,
     pub actions: Vec<String>,
     pub freqs: Vec<f32>,
+    /// False when `freqs` mean nothing for the hero's hand here (postflop, after
+    /// the hero took a line the solution (almost) never takes with it): the
+    /// grade then comes from the EVs alone.
+    pub freqs_trusted: bool,
     /// EV of each action (big blinds), when the solution provides it.
     pub evs: Option<Vec<f32>>,
     /// EV lost against the best action (big blinds; 0 when graded by frequency).
@@ -39,9 +60,8 @@ pub struct Feedback {
     pub category: String,
     pub spot: String,
     pub hand: String,
-    /// Strategy of every starting-hand class at this decision (preflop only):
-    /// `169 x actions`, with the hero's class.
-    pub grid: Option<(Vec<Vec<f32>>, usize)>,
+    /// The whole range at this decision (preflop only).
+    pub grid: Option<RangeGrid>,
 }
 
 /// One line of the hand history.
@@ -96,9 +116,9 @@ pub fn skip_obvious(freqs: &[f32], fold_index: Option<usize>, difficulty: u8, rn
     rng.unit_f32() < p
 }
 
+/// Big blinds with up to two decimals, e.g. "2.25", "97.5", "100".
 pub fn fmt_bb(x: f32) -> String {
-    let s = format!("{:.1}", x);
-    s.trim_end_matches(".0").to_string()
+    holdem_solver::postflop::tree::fmt_chips(x)
 }
 
 #[cfg(test)]
@@ -116,6 +136,15 @@ mod tests {
         let ratio = counts[2] as f64 / counts[0] as f64;
         assert!((ratio - 3.0).abs() < 0.2, "{ratio}");
         assert_eq!(sample_weighted(&[0.0, 0.0], &mut rng), None);
+    }
+
+    #[test]
+    fn bb_amounts_keep_ante_quarters() {
+        assert_eq!(fmt_bb(2.25), "2.25");
+        assert_eq!(fmt_bb(18.25), "18.25");
+        assert_eq!(fmt_bb(97.5), "97.5");
+        assert_eq!(fmt_bb(100.0), "100");
+        assert_eq!(fmt_bb(0.0), "0");
     }
 
     #[test]

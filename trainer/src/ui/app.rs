@@ -97,10 +97,23 @@ impl App {
             shot,
             frames: 0,
         };
+        // Push/fold ranges saved by older versions may name depths that are not shipped.
+        let stacks = app.content.pushfold_stacks();
+        let s = &mut app.profile.settings;
+        s.pushfold_min = snap_stack(&stacks, s.pushfold_min);
+        s.pushfold_max = snap_stack(&stacks, s.pushfold_max);
         if let Some(screen) = app.shot.as_ref().map(|s| s.screen.clone()) {
             app.setup_shot(&screen);
         }
         app
+    }
+
+    /// Saves the profile, except in screenshot mode (which must never touch
+    /// the real one).
+    pub fn save(&mut self) {
+        if self.shot.is_none() {
+            self.save_error = self.profile.save().err().map(|e| e.to_string());
+        }
     }
 
     fn setup_shot(&mut self, screen: &str) {
@@ -154,7 +167,7 @@ impl App {
                     .content
                     .pushfold
                     .iter()
-                    .filter(|p| p.pack.config.stack >= s.pushfold_min - 1e-9 && p.pack.config.stack <= s.pushfold_max + 1e-9)
+                    .filter(|p| p.nominal_stack() >= s.pushfold_min - 1e-9 && p.nominal_stack() <= s.pushfold_max + 1e-9)
                     .cloned()
                     .collect();
                 let packs = if packs.is_empty() { self.content.pushfold.clone() } else { packs };
@@ -205,16 +218,31 @@ impl App {
                 h.answer(i, &mut self.rng)
             }
         };
+        // Count the hand as soon as it is over, so the save below includes it.
+        let over = match &s.hand {
+            Hand::Pre(h) => h.end.is_some(),
+            Hand::Post(h) => h.is_over(),
+        };
+        if over {
+            self.profile.hands += 1;
+        }
         let award = self.profile.record(s.mode, &fb.category, fb.grade, fb.ev_loss as f64);
         if matches!(fb.grade, Grade::Mistake | Grade::Blunder) {
-            let solution = fb
-                .actions
-                .iter()
-                .zip(&fb.freqs)
-                .filter(|(_, &f)| f >= 0.05)
-                .map(|(a, f)| format!("{a} {:.0}%", 100.0 * f))
-                .collect::<Vec<_>>()
-                .join(", ");
+            let solution = match (&fb.evs, fb.freqs_trusted) {
+                // Off the solution's line only the EVs mean something.
+                (Some(evs), false) => {
+                    let best = (0..evs.len()).max_by(|&a, &b| evs[a].partial_cmp(&evs[b]).unwrap_or(std::cmp::Ordering::Equal)).unwrap_or(0);
+                    format!("{} (best EV)", fb.actions[best])
+                }
+                _ => fb
+                    .actions
+                    .iter()
+                    .zip(&fb.freqs)
+                    .filter(|(_, &f)| f >= 0.05)
+                    .map(|(a, f)| format!("{a} {:.0}%", 100.0 * f))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            };
             self.profile.add_mistake(MistakeRecord {
                 date: today(),
                 mode: s.mode,
@@ -239,7 +267,7 @@ impl App {
             self.goal_toast = Some(now);
         }
         s.feedback = Some(Answered { fb, award, at: now });
-        self.save_error = self.profile.save().err().map(|e| e.to_string());
+        self.save();
     }
 
     /// Closes the feedback; deals a new hand if the current one is over.
@@ -255,7 +283,6 @@ impl App {
             None => return,
         };
         if over {
-            self.profile.hands += 1;
             self.next_hand();
         }
     }
@@ -307,6 +334,7 @@ impl App {
         let done = today >= goal;
         widgets::ring(painter, ring_c, 16.0, 4.0, today as f32 / goal as f32, if done { theme::grade_color(Grade::Perfect) } else { TEAL });
         painter.text(ring_c, Align2::CENTER_CENTER, format!("{}", today.min(999)), theme::bold(11.0), TEXT);
+        painter.text(ring_c + vec2(0.0, 25.0), Align2::CENTER_CENTER, "today", theme::font(9.5), TEXT_FAINT);
         let ring_rect = Rect::from_center_size(ring_c, vec2(40.0, 40.0));
         ui.interact(ring_rect, egui::Id::new("goal_ring"), Sense::hover())
             .on_hover_text(format!("Daily goal: {today} of {goal} decisions today.\nDay streak: {} days", p.day_streak()));
@@ -371,8 +399,18 @@ impl App {
         let wants_feedback = shot.screen.ends_with("feedback");
         if !busy {
             if wants_feedback && self.session.as_ref().is_some_and(|s| s.feedback.is_none()) {
-                // Answer with the first action so the feedback panel shows.
-                self.answer(0, now);
+                // "*-line-feedback": first raise with the hand, to get to a later decision of it.
+                let first_raise = match &self.session {
+                    Some(Session { hand: Hand::Pre(h), .. }) if shot.screen.contains("line") && h.hero_decisions == 0 => h.decision().map(|d| {
+                        (0..d.labels.len()).filter(|&i| !d.labels[i].starts_with("Fold") && !d.labels[i].starts_with("Call") && !d.labels[i].starts_with("Check")).max_by(|&a, &b| d.freqs[a].total_cmp(&d.freqs[b])).unwrap_or(0)
+                    }),
+                    _ => None,
+                };
+                // Otherwise answer with the first action so the feedback panel shows.
+                self.answer(first_raise.unwrap_or(0), now);
+                if first_raise.is_some() {
+                    self.continue_hand();
+                }
                 return;
             }
             shot.ready_frames += 1;
@@ -472,6 +510,11 @@ impl eframe::App for App {
     }
 }
 
+/// The shipped push/fold depth nearest to `x` (`x` itself when none is shipped).
+pub fn snap_stack(stacks: &[f64], x: f64) -> f64 {
+    stacks.iter().copied().min_by(|a, b| (a - x).abs().partial_cmp(&(b - x).abs()).unwrap_or(std::cmp::Ordering::Equal)).unwrap_or(x)
+}
+
 /// A plausible profile for screenshots of the home and stats screens.
 fn demo_profile(rng: &mut Rng) -> Profile {
     let mut p = Profile::default();
@@ -480,7 +523,7 @@ fn demo_profile(rng: &mut Rng) -> Profile {
         (Mode::Cash, "RFI UTG"),
         (Mode::Cash, "BB vs BTN open"),
         (Mode::Cash, "SB vs BTN open"),
-        (Mode::Cash, "BTN vs 3-bet"),
+        (Mode::Cash, "BTN vs BB 3-bet"),
         (Mode::PushFold, "Push SB 10bb"),
         (Mode::PushFold, "Call BB vs SB jam"),
         (Mode::Postflop, "SRP flop BB"),

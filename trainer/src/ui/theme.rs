@@ -12,7 +12,7 @@ pub const PANEL_3: Color32 = Color32::from_rgb(38, 55, 84);
 pub const BORDER: Color32 = Color32::from_rgb(44, 62, 94);
 pub const TEXT: Color32 = Color32::from_rgb(232, 238, 247);
 pub const TEXT_DIM: Color32 = Color32::from_rgb(146, 162, 189);
-pub const TEXT_FAINT: Color32 = Color32::from_rgb(96, 112, 140);
+pub const TEXT_FAINT: Color32 = Color32::from_rgb(122, 138, 168);
 pub const GOLD: Color32 = Color32::from_rgb(245, 184, 61);
 pub const TEAL: Color32 = Color32::from_rgb(61, 214, 198);
 pub const FLAME: Color32 = Color32::from_rgb(255, 122, 69);
@@ -27,6 +27,8 @@ pub const PASSIVE: Color32 = Color32::from_rgb(46, 173, 107);
 pub const BET_S: Color32 = Color32::from_rgb(240, 138, 36);
 pub const BET_L: Color32 = Color32::from_rgb(229, 83, 61);
 pub const ALLIN: Color32 = Color32::from_rgb(168, 72, 200);
+/// Range grid cells (or the part of a cell) the range does not reach.
+pub const OUT_OF_RANGE: Color32 = Color32::from_rgb(31, 39, 54);
 
 pub const RED_SUIT: Color32 = Color32::from_rgb(214, 40, 57);
 pub const BLUE_SUIT: Color32 = Color32::from_rgb(28, 104, 200);

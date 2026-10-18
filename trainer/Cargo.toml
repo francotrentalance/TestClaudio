@@ -1,7 +1,9 @@
 [package]
 name = "holdem-trainer"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
+# std::fs::File::try_lock (the single-instance lock in main.rs).
+rust-version = "1.89"
 description = "Hold'em Trainer: a GTO quiz trainer for 6-max No-Limit Hold'em"
 license = "MIT"
 default-run = "holdem-trainer"

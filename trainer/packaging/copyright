@@ -1,14 +1,48 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: holdem-trainer
 Source: https://github.com/francotrentalance/TestClaudio
+Comment: /usr/bin/holdem-trainer also contains the Rust crates it is built
+ from. They are listed with their licences, and the licence texts they ship,
+ in /usr/share/doc/holdem-trainer/THIRD-PARTY-NOTICES.
 
 Files: *
 Copyright: 2026 Hold'em Trainer contributors
 License: MIT
 
-Files: usr/bin/holdem-trainer (embedded Poppins fonts)
+Files: trainer/assets/fonts/Poppins-*.ttf
 Copyright: 2020 The Poppins Project Authors (https://github.com/itfoundry/Poppins)
 License: OFL-1.1
+Comment: Embedded in /usr/bin/holdem-trainer. Licence text in
+ /usr/share/doc/holdem-trainer/OFL.txt.
+
+Files: epaint_default_fonts-0.29.1/fonts/Ubuntu-Light.ttf
+Copyright: 2011 Canonical Ltd.
+License: UFL-1.0
+Comment: egui's default font, from the epaint_default_fonts 0.29.1 crate;
+ embedded in /usr/bin/holdem-trainer.
+
+Files: epaint_default_fonts-0.29.1/fonts/NotoEmoji-Regular.ttf
+Copyright: 2013 Google Inc.
+License: OFL-1.1
+Comment: egui's default emoji font, from the epaint_default_fonts 0.29.1
+ crate; embedded in /usr/bin/holdem-trainer. Licence text in
+ /usr/share/doc/holdem-trainer/OFL-NotoEmoji.txt.
+
+Files: epaint_default_fonts-0.29.1/fonts/Hack-Regular.ttf
+Copyright: 2018 Source Foundry Authors
+           2003 Bitstream, Inc.
+License: MIT and Bitstream-Vera
+Comment: egui's default monospace font, from the epaint_default_fonts 0.29.1
+ crate; embedded in /usr/bin/holdem-trainer. The DejaVu changes it includes
+ are in the public domain. Licence texts in
+ /usr/share/doc/holdem-trainer/Hack-Regular.txt.
+
+Files: epaint_default_fonts-0.29.1/fonts/emoji-icon-font.ttf
+Copyright: 2014 John Slegers
+License: MIT
+Comment: egui's default icon font, from the epaint_default_fonts 0.29.1
+ crate; embedded in /usr/bin/holdem-trainer. Licence text with its copyright
+ notice in /usr/share/doc/holdem-trainer/emoji-icon-font-mit-license.txt.
 
 License: MIT
  Permission is hereby granted, free of charge, to any person obtaining a
@@ -31,4 +65,13 @@ License: MIT
 
 License: OFL-1.1
  The full text of the SIL Open Font License 1.1 is in
- /usr/share/doc/holdem-trainer/OFL.txt.
+ /usr/share/doc/holdem-trainer/OFL.txt (Poppins) and
+ /usr/share/doc/holdem-trainer/OFL-NotoEmoji.txt (Noto Emoji).
+
+License: UFL-1.0
+ The full text of the Ubuntu Font Licence 1.0 is in
+ /usr/share/doc/holdem-trainer/UFL.txt.
+
+License: Bitstream-Vera
+ The full text of the Bitstream Vera Fonts licence is in
+ /usr/share/doc/holdem-trainer/Hack-Regular.txt.

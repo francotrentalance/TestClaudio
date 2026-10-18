@@ -164,6 +164,32 @@ pub fn describe(value: u32) -> &'static str {
     CATEGORY_NAMES[category(value) as usize]
 }
 
+const RANK_NAMES: [&str; 13] =
+    ["two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "jack", "queen", "king", "ace"];
+const RANK_PLURALS: [&str; 13] =
+    ["twos", "threes", "fours", "fives", "sixes", "sevens", "eights", "nines", "tens", "jacks", "queens", "kings", "aces"];
+
+/// The hand in words with the ranks that make it, e.g. "a pair of kings",
+/// "two pair, kings and sevens" or "kings full of sevens". Kickers are left
+/// out, so two hands with the same description differ only by kickers.
+pub fn describe_long(value: u32) -> String {
+    let main = ((value >> 16) & 0xF) as usize;
+    let second = ((value >> 12) & 0xF) as usize;
+    let (one, many) = (RANK_NAMES[main], RANK_PLURALS[main]);
+    match category(value) {
+        HIGH_CARD => format!("{one} high"),
+        ONE_PAIR => format!("a pair of {many}"),
+        TWO_PAIR => format!("two pair, {many} and {}", RANK_PLURALS[second]),
+        TRIPS => format!("three {many}"),
+        STRAIGHT => format!("a straight to the {one}"),
+        FLUSH => format!("a flush, {one} high"),
+        FULL_HOUSE => format!("{many} full of {}", RANK_PLURALS[second]),
+        QUADS => format!("four {many}"),
+        _ if main == 12 => "a royal flush".into(),
+        _ => format!("a straight flush to the {one}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,6 +217,28 @@ mod tests {
         assert!(ev("AhAdAc2s2c2hKd") < ev("AhAdAcKs2c2hKd"));
         // Three pairs: best two plus the best kicker.
         assert_eq!(ev("AhAdKcKsQcQhJd"), ev("AhAdKcKsQcJh2d"));
+    }
+
+    #[test]
+    fn long_descriptions() {
+        let d = |s: &str| describe_long(ev(s));
+        assert_eq!(d("AsKd9c7h2s"), "ace high");
+        assert_eq!(d("KsKd9c7h2s"), "a pair of kings");
+        assert_eq!(d("KsKd7c7h2s"), "two pair, kings and sevens");
+        // Three pairs: the best two.
+        assert_eq!(d("KsKd7c7h2s2dAc"), "two pair, kings and sevens");
+        assert_eq!(d("9s9d9cAh2s"), "three nines");
+        assert_eq!(d("Ts9d8c7h6s"), "a straight to the ten");
+        assert_eq!(d("5d4s3s2sAh"), "a straight to the five");
+        assert_eq!(d("AsJs8s4s2sKd"), "a flush, ace high");
+        assert_eq!(d("KsKdKc7h7s"), "kings full of sevens");
+        assert_eq!(d("6s6d6c6hAs"), "four sixes");
+        assert_eq!(d("9h8h7h6h5h"), "a straight flush to the nine");
+        assert_eq!(d("5s4s3s2sAs"), "a straight flush to the five");
+        assert_eq!(d("AhKhQhJhTh"), "a royal flush");
+        // Kickers are not part of the description.
+        assert_eq!(d("KsKd9c7h2s"), d("KhKcAc7d2d"));
+        assert_ne!(ev("KsKd9c7h2s"), ev("KhKcAc7d2d"));
     }
 
     /// Exhaustive check over all 2,598,960 five-card hands against the known

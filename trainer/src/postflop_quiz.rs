@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 use holdem_solver::card::{Card, Rng, card_bit, card_to_string, combo_index, combo_to_string, permute_card};
-use holdem_solver::eval::{describe, eval_mask};
+use holdem_solver::eval::{describe_long, eval_mask};
 use holdem_solver::postflop::explore::{Explorer, Frame};
 use holdem_solver::postflop::tree::fmt_chips;
 use holdem_solver::postflop::{Action, NodeKind, PostflopGame};
@@ -19,7 +19,7 @@ use holdem_solver::range::Range;
 use crate::gen::{spot_positions, turn_config};
 use crate::grading::by_ev;
 use crate::model::{Act, ActKind, FlopLibrary, FlopSpot, Next};
-use crate::quiz::{Feedback, LogEntry, SeatView, sample_weighted, skip_obvious};
+use crate::quiz::{Feedback, LogEntry, MIN_REACH, SeatView, sample_weighted, skip_obvious};
 
 pub enum Stage {
     Flop(u32),
@@ -66,6 +66,11 @@ pub struct PostflopHand {
     pub hero_decisions: u32,
     /// EV the hero has given up so far this hand (big blinds).
     pub ev_lost: f32,
+    /// Product of the solution's frequencies for the hero's hand of the actions
+    /// the hero took so far on this solve (flop, or turn subgame). Below
+    /// [`MIN_REACH`] the solution never brings the hand here, so its stored
+    /// frequencies are untrained noise and only the EVs mean something.
+    hero_reach: f32,
     contrib: [f32; 2],
     street_start: [f32; 2],
     last_action: [Option<String>; 2],
@@ -162,6 +167,7 @@ impl PostflopHand {
             stage: Stage::Flop(0),
             hero_decisions: 0,
             ev_lost: 0.0,
+            hero_reach: 1.0,
             contrib: [half, half],
             street_start: [half, half],
             last_action: [None, None],
@@ -352,6 +358,10 @@ impl PostflopHand {
             Ok(Ok(game)) => {
                 let frames = Explorer::new(&game).frames;
                 self.stage = Stage::Later { game: Box::new(game), frames };
+                // The subgame keeps the hero's hand in range (at a tiny weight if
+                // need be), and its strategy at the turn converges whatever that
+                // weight, so the hero is back on the solution's path.
+                self.hero_reach = 1.0;
                 self.advance(rng);
                 true
             }
@@ -443,7 +453,7 @@ impl PostflopHand {
         };
         self.stage = Stage::Over(PostEnd::Showdown {
             winner,
-            desc: [describe(ranks[0]).to_string(), describe(ranks[1]).to_string()],
+            desc: [describe_long(ranks[0]), describe_long(ranks[1])],
         });
     }
 
@@ -513,7 +523,10 @@ impl PostflopHand {
 
     pub fn answer(&mut self, i: usize, rng: &mut Rng) -> Feedback {
         let d = self.decision().expect("hero to act");
-        let (grade, loss) = by_ev(&d.evs, &d.freqs, i, d.pot);
+        // Grade with the reach into this decision, then follow the chosen action.
+        let freqs_trusted = self.hero_reach >= MIN_REACH;
+        let (grade, loss) = by_ev(&d.evs, &d.freqs, i, d.pot, freqs_trusted);
+        self.hero_reach *= d.freqs[i];
         self.ev_lost += loss;
         self.hero_decisions += 1;
         let (a, b) = self.cards[self.hero];
@@ -522,6 +535,7 @@ impl PostflopHand {
             chosen: i,
             actions: d.labels.clone(),
             freqs: d.freqs.clone(),
+            freqs_trusted,
             evs: Some(d.evs.clone()),
             ev_loss: loss,
             pot: d.pot,
@@ -592,16 +606,23 @@ impl PostflopHand {
     pub fn end_text(&self) -> Option<String> {
         let Stage::Over(end) = &self.stage else { return None };
         let pos = self.positions();
+        let villain = pos[1 - self.hero];
         let pot = fmt_chips(self.pot());
+        // After a fold the uncalled part of the last bet goes back to the bettor.
+        let won = fmt_chips(2.0 * self.contrib[0].min(self.contrib[1]));
         Some(match end {
-            PostEnd::Fold { folder } if *folder == self.hero => format!("You fold. {} wins {pot}bb.", pos[1 - self.hero]),
-            PostEnd::Fold { .. } => format!("{} folds. You win {pot}bb.", pos[1 - self.hero]),
-            PostEnd::Showdown { winner: None, desc } => format!("Split pot: both have {}.", desc[self.hero]),
-            PostEnd::Showdown { winner: Some(w), desc } if *w == self.hero => {
-                format!("You win {pot}bb with {} against {}.", desc[self.hero], desc[1 - self.hero])
-            }
-            PostEnd::Showdown { desc, .. } => {
-                format!("{} wins {pot}bb with {} against your {}.", pos[1 - self.hero], desc[1 - self.hero], desc[self.hero])
+            PostEnd::Fold { folder } if *folder == self.hero => format!("You fold. {villain} wins {won}bb."),
+            PostEnd::Fold { .. } => format!("{villain} folds. You win {won}bb."),
+            PostEnd::Showdown { winner: None, desc } => format!("Split pot: you both have {}.", desc[self.hero]),
+            PostEnd::Showdown { winner: Some(w), desc } => {
+                let (mine, theirs) = (&desc[self.hero], &desc[1 - self.hero]);
+                // The same description with different values: the kicker decided.
+                match (*w == self.hero, mine == theirs) {
+                    (true, false) => format!("You win {pot}bb with {mine} against {theirs}."),
+                    (true, true) => format!("You win {pot}bb: you both have {mine}, and your kicker is better."),
+                    (false, false) => format!("{villain} wins {pot}bb with {theirs}; you have {mine}."),
+                    (false, true) => format!("{villain} wins {pot}bb: you both have {mine}, and {villain}'s kicker is better."),
+                }
             }
             PostEnd::OffTree => "The solution never plays this line, so there is no strategy to continue against. Hand over.".into(),
             PostEnd::Error(e) => format!("Could not continue the hand: {e}"),
@@ -612,11 +633,81 @@ impl PostflopHand {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::FlopNode;
 
+    /// Solved once and shared by the tests.
     fn library() -> Arc<FlopLibrary> {
-        // A small, quick spot: narrow 3-bet pot ranges on a river-like dry flop.
-        let spot = crate::gen::flop_spot(crate::gen::THREE_BET, "Ks7d2c", |_| {}).unwrap();
-        Arc::new(FlopLibrary { spots: vec![spot] })
+        static LIB: std::sync::OnceLock<Arc<FlopLibrary>> = std::sync::OnceLock::new();
+        LIB.get_or_init(|| {
+            // A small, quick spot: narrow 3-bet pot ranges on a river-like dry flop.
+            let spot = crate::gen::flop_spot(crate::gen::THREE_BET, "Ks7d2c", |_| {}).unwrap();
+            Arc::new(FlopLibrary { spots: vec![spot] })
+        })
+        .clone()
+    }
+
+    #[test]
+    fn end_texts_name_the_hands_and_the_pot_won() {
+        let mut h = PostflopHand::new_hand(library(), 0, 0, &mut Rng::new(1)).unwrap();
+        assert_eq!(h.positions(), ["BB", "BTN"]);
+        // BTN bets 15.38 into 20.5 and the hero folds: the uncalled bet goes back.
+        h.contrib = [10.25, 25.63];
+        h.stage = Stage::Over(PostEnd::Fold { folder: 0 });
+        assert_eq!(h.end_text().unwrap(), "You fold. BTN wins 20.5bb.");
+        h.contrib = [20.5, 20.5];
+        let desc = |a: &str, b: &str| [a.to_string(), b.to_string()];
+        h.stage = Stage::Over(PostEnd::Showdown { winner: Some(1), desc: desc("a pair of kings", "a pair of kings") });
+        assert_eq!(h.end_text().unwrap(), "BTN wins 41bb: you both have a pair of kings, and BTN's kicker is better.");
+        h.stage = Stage::Over(PostEnd::Showdown { winner: Some(0), desc: desc("kings full of sevens", "a flush, ace high") });
+        assert_eq!(h.end_text().unwrap(), "You win 41bb with kings full of sevens against a flush, ace high.");
+        h.stage = Stage::Over(PostEnd::Showdown { winner: Some(1), desc: desc("two pair, kings and sevens", "three nines") });
+        assert_eq!(h.end_text().unwrap(), "BTN wins 41bb with three nines; you have two pair, kings and sevens.");
+    }
+
+    #[test]
+    fn off_path_actions_are_graded_by_ev_only() {
+        let lib = library();
+        let spot = &lib.spots[0];
+        let freq = |n: &FlopNode, a: usize, h: usize| spot.node_strategy(n, h)[a];
+        let root = &spot.nodes[0];
+        assert_eq!(root.player, 0);
+        let check = root.actions.iter().position(|a| a.kind == ActKind::Check).unwrap();
+        let Next::Node(m) = root.next[check] else { panic!("a check leads to the IP decision") };
+        let after = &spot.nodes[m as usize];
+        let bet = after.actions.iter().position(|a| a.kind == ActKind::Bet).unwrap();
+        // OOP holds a hand the solution never checks; IP the hand that bets most after a check.
+        let in_range = |p: usize| (0..spot.hands[p].len()).filter(move |&i| spot.weights[p][i] > 0.0);
+        let hero = in_range(0).min_by(|&a, &b| freq(root, check, a).total_cmp(&freq(root, check, b))).unwrap();
+        assert!(freq(root, check, hero) < MIN_REACH);
+        let (a, b) = spot.hands[0][hero];
+        let blocked = card_bit(a) | card_bit(b);
+        let villain = in_range(1)
+            .filter(|&i| (card_bit(spot.hands[1][i].0) | card_bit(spot.hands[1][i].1)) & blocked == 0)
+            .max_by(|&x, &y| freq(after, bet, x).total_cmp(&freq(after, bet, y)))
+            .unwrap();
+        let mut rng = Rng::new(7);
+        for _ in 0..20 {
+            let mut h = PostflopHand::new_hand(lib.clone(), 0, 0, &mut rng).unwrap();
+            h.cards = [spot.hands[0][hero], spot.hands[1][villain]];
+            let used: Vec<Card> = spot.board.iter().copied().chain([h.cards[0].0, h.cards[0].1, h.cards[1].0, h.cards[1].1]).collect();
+            h.deck = (0..52u8).filter(|c| !used.contains(c)).collect();
+            let fb = h.answer(check, &mut rng);
+            assert!(fb.freqs_trusted, "a first decision is on the solution's path");
+            // The villain must bet so the hero decides again on the flop.
+            let Stage::Flop(n) = h.stage else { continue };
+            let node = spot.nodes[n as usize].clone();
+            let d = h.decision().expect("hero faces the bet");
+            // The most frequent stored action that does not start a turn solve.
+            let j = (0..d.freqs.len())
+                .filter(|&j| !matches!(node.next[j], Next::Line(_)))
+                .max_by(|&x, &y| d.freqs[x].total_cmp(&d.freqs[y]))
+                .unwrap();
+            let fb = h.answer(j, &mut rng);
+            assert!(!fb.freqs_trusted, "the hero's hand never gets here in the solution");
+            assert_eq!(fb.grade, by_ev(&d.evs, &d.freqs, j, d.pot, false).0, "graded by EV alone");
+            return;
+        }
+        panic!("the villain never bet in 20 attempts (bet frequency {})", freq(after, bet, villain));
     }
 
     #[test]

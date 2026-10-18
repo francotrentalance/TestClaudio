@@ -40,7 +40,8 @@ pub fn draw_table(ui: &mut Ui, rect: Rect, view: &TableView) {
     let p = ui.painter_at(rect);
     let c = rect.center() + vec2(0.0, rect.height() * 0.02);
     let rx = rect.width() * 0.36;
-    let ry = rect.height() * 0.29;
+    // Short windows: keep the hero's action pill (c.y + ry + 80) inside the rect.
+    let ry = (rect.height() * 0.29).min(rect.height() * 0.48 - 84.0);
 
     // Rail, felt and an inner line.
     p.add(Shape::convex_polygon(ellipse(c + vec2(0.0, 10.0), rx + 30.0, ry + 30.0, 96), Color32::from_black_alpha(110), Stroke::NONE));
@@ -50,7 +51,8 @@ pub fn draw_table(ui: &mut Ui, rect: Rect, view: &TableView) {
     p.add(Shape::closed_line(ellipse(c, rx * 0.78, ry * 0.7, 96), Stroke::new(1.5_f32, Color32::from_white_alpha(22))));
 
     // Board.
-    let ch = (ry * 0.42).clamp(54.0, 86.0);
+    // Narrow tables: keep the board inside the side seats' bets.
+    let ch = (ry * 0.42).min(rx * 0.21).clamp(44.0, 86.0);
     let cw = ch * 0.71;
     let gap = cw * 0.12;
     let total = 5.0 * cw + 4.0 * gap;
@@ -66,9 +68,11 @@ pub fn draw_table(ui: &mut Ui, rect: Rect, view: &TableView) {
     }
 
     // Pot.
+    let mut pot_top = board_top;
     if view.pot > 0.0 {
         let galley = p.layout_no_wrap(format!("Pot  {} bb", fmt_bb(view.pot)), theme::semibold(16.0), TEXT);
         let pill = Rect::from_center_size(pos2(c.x, board_top - 26.0), galley.size() + vec2(26.0, 8.0));
+        pot_top = pill.top();
         p.rect_filled(pill, Rounding::same(pill.height() / 2.0), Color32::from_black_alpha(120));
         p.galley(pill.center() - galley.size() / 2.0, galley, TEXT);
     }
@@ -77,22 +81,24 @@ pub fn draw_table(ui: &mut Ui, rect: Rect, view: &TableView) {
     let n = view.seats.len();
     let hero = view.seats.iter().position(|s| s.is_hero).unwrap_or(0);
     let angles = slots(n);
-    let t = ui.ctx().input(|i| i.time) as f32;
     for (k, &deg) in angles.iter().enumerate() {
         let seat = &view.seats[(hero + k) % n];
         let a = deg.to_radians();
         let dir = vec2(a.cos(), a.sin());
         let spot = c + vec2(dir.x * (rx + 34.0), dir.y * (ry + 30.0));
         let hero_h = (ry * 0.56).clamp(62.0, 92.0);
-        draw_seat(&p, spot, seat, view.four_color, t, hero_h);
+        draw_seat(&p, spot, seat, view.four_color, hero_h);
 
         // Bet in front of the seat; the hero's goes beside their cards, the
-        // top seat's stays clear of the pot.
+        // top seat's stays between its action pill and the pot (or beside the
+        // nameplate when a short table leaves no room there).
         if seat.bet > 0.005 {
             let b = if seat.is_hero {
                 spot + vec2(-(hero_h * 0.71 * 1.08 + 40.0), -hero_h * 0.75)
             } else if dir.y < -0.9 {
-                c + vec2(0.0, -ry * 0.74)
+                let lo = spot.y + 26.0 + 24.0 + 21.0;
+                let hi = pot_top - 33.0;
+                if lo <= hi { pos2(c.x, (c.y - ry * 0.74).clamp(lo, hi)) } else { spot + vec2(-98.0, 4.0) }
             } else {
                 c + vec2(dir.x * rx * 0.62, dir.y * ry * 0.58)
             };
@@ -118,7 +124,7 @@ pub fn draw_table(ui: &mut Ui, rect: Rect, view: &TableView) {
     }
 }
 
-fn draw_seat(p: &egui::Painter, at: Pos2, seat: &SeatView, four_color: bool, t: f32, hero_h: f32) {
+fn draw_seat(p: &egui::Painter, at: Pos2, seat: &SeatView, four_color: bool, hero_h: f32) {
     let w = if seat.is_hero { 150.0 } else { 128.0 };
     let plate = Rect::from_center_size(at, vec2(w, 52.0));
     let dim = if seat.folded { 0.45 } else { 1.0 };
@@ -143,9 +149,9 @@ fn draw_seat(p: &egui::Painter, at: Pos2, seat: &SeatView, four_color: bool, t: 
         }
     }
 
+    // A steady glow: the app only repaints on input, so a pulse would stutter.
     if seat.to_act {
-        let pulse = 0.5 + 0.5 * (t * 4.0).sin();
-        p.rect_filled(plate.expand(4.0 + 2.0 * pulse), Rounding::same(16.0), theme::mix(TEAL, BG, 0.55).gamma_multiply(0.7));
+        p.rect_filled(plate.expand(5.0), Rounding::same(16.0), theme::mix(TEAL, BG, 0.55).gamma_multiply(0.7));
     }
     let fill = if seat.is_hero { Color32::from_rgb(30, 44, 70) } else { Color32::from_rgb(22, 32, 52) };
     let fill = if seat.folded { theme::mix(fill, BG, 0.35) } else { fill };

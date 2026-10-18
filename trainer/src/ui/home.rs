@@ -21,13 +21,21 @@ pub fn centered(ui: &mut egui::Ui, max: f32, add: impl FnOnce(&mut egui::Ui)) {
     });
 }
 
+/// Short windows (1366x768 laptops, the 660px minimum) get a tighter layout so
+/// the drills' Train buttons stay above the fold.
+fn compact(ctx: &egui::Context) -> bool {
+    ctx.screen_rect().height() < 760.0
+}
+
 pub fn show(app: &mut App, ctx: &egui::Context) {
     let mut start: Option<Mode> = None;
-    egui::CentralPanel::default().frame(egui::Frame::none().fill(BG).inner_margin(Margin::symmetric(24.0, 20.0))).show(ctx, |ui| {
+    let tight = compact(ctx);
+    let margin = Margin::symmetric(24.0, if tight { 12.0 } else { 20.0 });
+    egui::CentralPanel::default().frame(egui::Frame::none().fill(BG).inner_margin(margin)).show(ctx, |ui| {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             centered(ui, 1120.0, |ui| {
                 hero_row(ui, app);
-                ui.add_space(22.0);
+                ui.add_space(if tight { 12.0 } else { 22.0 });
                 ui.label(egui::RichText::new("Choose a drill").font(theme::semibold(20.0)).color(TEXT));
                 ui.add_space(6.0);
                 let w = ui.available_width();
@@ -47,7 +55,12 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         });
     });
     if let Some(mode) = start {
-        app.start(mode);
+        // The running drill's card resumes it instead of starting over.
+        if app.session.as_ref().is_some_and(|s| s.mode == mode) {
+            app.screen = Screen::Train;
+        } else {
+            app.start(mode);
+        }
     }
 }
 
@@ -62,8 +75,8 @@ fn hero_row(ui: &mut egui::Ui, app: &App) {
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = 16.0;
         // Level card.
-        widgets::panel_frame(PANEL).show(ui, |ui| {
-            ui.set_width(w - goal_w - 16.0 - 34.0);
+        let level_card = widgets::panel_frame(PANEL).show(ui, |ui| {
+            ui.set_width(w - goal_w - 16.0 - 32.0);
             ui.set_height(176.0);
             ui.vertical(|ui| {
             ui.horizontal(|ui| {
@@ -110,22 +123,23 @@ fn hero_row(ui: &mut egui::Ui, app: &App) {
             });
             });
         });
-        // Daily goal card.
+        // Daily goal card, as tall as the level card.
+        let row_h = level_card.response.rect.height() - 32.0;
         widgets::panel_frame(PANEL).show(ui, |ui| {
-            ui.set_width(goal_w - 34.0);
-            ui.set_height(176.0);
+            ui.set_width(goal_w - 32.0);
+            ui.set_height(row_h);
             let goal = p.settings.daily_goal.max(1);
             let today = p.today_count();
             ui.horizontal(|ui| {
                 ui.add_space(0.0);
-                let (r, _) = ui.allocate_exact_size(vec2(118.0, 176.0), Sense::hover());
+                let (r, _) = ui.allocate_exact_size(vec2(118.0, row_h), Sense::hover());
                 let done = today >= goal;
                 let color = if done { Color32::from_rgb(61, 220, 132) } else { TEAL };
                 widgets::ring(ui.painter(), r.center(), 50.0, 10.0, today as f32 / goal as f32, color);
                 ui.painter().text(r.center() - vec2(0.0, 8.0), Align2::CENTER_CENTER, today.to_string(), theme::bold(28.0), TEXT);
                 ui.painter().text(r.center() + vec2(0.0, 18.0), Align2::CENTER_CENTER, format!("of {goal}"), theme::font(12.5), TEXT_DIM);
                 ui.vertical(|ui| {
-                    ui.add_space(44.0);
+                    ui.add_space(((row_h - 88.0) / 2.0).max(0.0));
                     ui.label(egui::RichText::new("Daily goal").font(theme::semibold(17.0)).color(TEXT));
                     let msg = if done { "Done for today. Nice work!".to_string() } else { format!("{} decisions to go", goal - today) };
                     ui.label(egui::RichText::new(msg).font(theme::font(13.0)).color(TEXT_DIM));
@@ -141,7 +155,7 @@ fn mode_info(app: &App, mode: Mode) -> (&'static str, String, Color32) {
     match mode {
         Mode::Cash => (
             "Preflop Cash",
-            "6-max, 100bb deep. Opens, 3-bets, 4-bets and calls from every seat, against opponents who play the solution.".into(),
+            "6-max, 100bb deep. Opens, 3-bets, 4-bets and calls from every seat; opponents play the solution.".into(),
             Color32::from_rgb(214, 52, 60),
         ),
         Mode::PushFold => {
@@ -159,8 +173,9 @@ fn mode_info(app: &App, mode: Mode) -> (&'static str, String, Color32) {
         Mode::Postflop => (
             "Postflop",
             format!(
-                "BTN vs BB single-raised and 3-bet pots on {} flops. Turn and river are solved live for the exact board.",
-                app.content.flops.spots.len()
+                "BTN vs BB single-raised and 3-bet pots on {} flop{}. Turn and river are solved live for the exact board.",
+                app.content.flops.spots.len(),
+                if app.content.flops.spots.len() == 1 { "" } else { "s" }
             ),
             Color32::from_rgb(40, 120, 220),
         ),
@@ -179,11 +194,13 @@ fn draw_mode_art(p: &egui::Painter, r: Rect, mode: Mode, accent: Color32) {
             draw_card(p, b, Some(holdem_solver::card::make_card(11, 2)), true, 1.0);
         }
         Mode::PushFold => {
+            // Drawn for a 98px tall banner; scaled down in the compact one.
+            let s = (r.height() / 98.0).min(1.0);
             for k in 0..5 {
-                draw_chip(p, c + vec2(-22.0, 22.0 - 7.0 * k as f32), 18.0, accent);
+                draw_chip(p, c + vec2(-22.0, 22.0 - 7.0 * k as f32) * s, 18.0 * s, accent);
             }
             for k in 0..3 {
-                draw_chip(p, c + vec2(22.0, 22.0 - 7.0 * k as f32), 18.0, Color32::from_rgb(30, 30, 36));
+                draw_chip(p, c + vec2(22.0, 22.0 - 7.0 * k as f32) * s, 18.0 * s, Color32::from_rgb(30, 30, 36));
             }
         }
         Mode::Postflop => {
@@ -198,18 +215,25 @@ fn draw_mode_art(p: &egui::Painter, r: Rect, mode: Mode, accent: Color32) {
     }
 }
 
-/// Returns true when the drill should start.
+/// Returns true when the drill should start (or resume). The whole card is clickable.
 fn mode_card(ui: &mut egui::Ui, app: &App, mode: Mode, width: f32) -> bool {
     let (title, desc, accent) = mode_info(app, mode);
     let stats = app.profile.mode_stats(mode);
+    let resume = app.session.as_ref().is_some_and(|s| s.mode == mode);
+    let tight = compact(ui.ctx());
+    let banner_h = if tight { 56.0 } else { 118.0 };
     let mut go = false;
     let frame = widgets::panel_frame(PANEL).inner_margin(Margin::same(0.0));
-    let resp = frame.show(ui, |ui| {
+    // The card's click sense sits below its widgets, so the Train button keeps its
+    // own hover; the labels must not take clicks for text selection.
+    let card = ui.scope_builder(egui::UiBuilder::new().sense(Sense::click()), |ui| {
+        ui.style_mut().interaction.selectable_labels = false;
+        frame.show(ui, |ui| {
         ui.set_width(width);
         ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
         // Art banner.
-        let (banner, _) = ui.allocate_exact_size(vec2(width, 118.0), Sense::hover());
+        let (banner, _) = ui.allocate_exact_size(vec2(width, banner_h), Sense::hover());
         let p = ui.painter();
         let top = Rounding { nw: 14.0, ne: 14.0, sw: 0.0, se: 0.0 };
         p.rect_filled(banner, top, theme::mix(FELT_DARK, accent, 0.18));
@@ -217,30 +241,34 @@ fn mode_card(ui: &mut egui::Ui, app: &App, mode: Mode, width: f32) -> bool {
         draw_mode_art(p, banner.shrink(10.0), mode, accent);
         egui::Frame::none().inner_margin(Margin::same(16.0)).show(ui, |ui| {
             ui.set_width(width - 32.0);
-            ui.spacing_mut().item_spacing.y = 8.0;
+            ui.spacing_mut().item_spacing.y = if tight { 5.0 } else { 8.0 };
             ui.label(egui::RichText::new(title).font(theme::bold(21.0)).color(TEXT));
             ui.add_space(2.0);
             ui.allocate_ui_with_layout(vec2(width - 32.0, 62.0), Layout::top_down(egui::Align::Min), |ui| {
                 ui.set_min_size(vec2(width - 32.0, 62.0));
                 ui.add(egui::Label::new(egui::RichText::new(desc).font(theme::font(13.5)).color(TEXT_DIM)).wrap());
             });
-            ui.add_space(6.0);
+            ui.add_space(if tight { 2.0 } else { 6.0 });
             ui.horizontal(|ui| {
                 let acc = stats.accuracy().map(|a| format!("{:.0}%", 100.0 * a)).unwrap_or_else(|| "–".into());
                 ui.label(egui::RichText::new(format!("{} decisions", stats.decisions)).font(theme::medium(13.0)).color(TEXT_DIM));
                 ui.label(egui::RichText::new("·").color(TEXT_FAINT));
                 ui.label(egui::RichText::new(format!("{acc} accuracy")).font(theme::medium(13.0)).color(TEAL));
             });
-            ui.add_space(10.0);
-            if widgets::primary_button(ui, "Train", width - 32.0).clicked() {
+            ui.add_space(if tight { 4.0 } else { 10.0 });
+            if widgets::primary_button(ui, if resume { "Resume" } else { "Train" }, width - 32.0).clicked() {
                 go = true;
             }
         });
         });
+        })
     });
-    let hovered = resp.response.contains_pointer();
-    if hovered {
-        ui.painter().rect_stroke(resp.response.rect, Rounding::same(14.0), Stroke::new(1.5_f32, theme::mix(BORDER, accent, 0.8)));
+    let card = card.response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    if card.clicked() {
+        go = true;
+    }
+    if card.contains_pointer() {
+        ui.painter().rect_stroke(card.rect, Rounding::same(14.0), Stroke::new(1.5_f32, theme::mix(BORDER, accent, 0.8)));
     }
     go
 }

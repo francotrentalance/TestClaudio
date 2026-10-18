@@ -135,6 +135,8 @@ pub struct Award {
     pub xp: u32,
     pub level_before: u32,
     pub level_after: u32,
+    /// The streak before and after this decision.
+    pub streak_before: u32,
     pub streak: u32,
     pub goal_reached_now: bool,
 }
@@ -180,7 +182,8 @@ impl Profile {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let tmp = path.with_extension("json.tmp");
+        // Per process, so two running instances never write the same temp file.
+        let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
         std::fs::write(&tmp, serde_json::to_string_pretty(self).unwrap_or_default())?;
         std::fs::rename(tmp, path)
     }
@@ -215,8 +218,9 @@ impl Profile {
 
     /// Records one graded decision and returns what it earned.
     pub fn record(&mut self, mode: Mode, category: &str, grade: Grade, ev_loss_bb: f64) -> Award {
+        let streak_before = self.streak;
         let level_before = self.level();
-        let xp = xp_for(grade, self.streak);
+        let xp = xp_for(grade, streak_before);
         self.xp += xp as u64;
         self.decisions += 1;
         if grade.breaks_streak() {
@@ -241,6 +245,7 @@ impl Profile {
             xp,
             level_before,
             level_after: self.level(),
+            streak_before,
             streak: self.streak,
             goal_reached_now: before < goal && before + 1 >= goal,
         }
@@ -267,19 +272,23 @@ mod tests {
         let a = p.record(Mode::Cash, "RFI BTN", Grade::Perfect, 0.0);
         assert_eq!(a.xp, 10);
         assert_eq!(p.streak, 1);
+        assert_eq!((a.streak_before, a.streak), (0, 1));
         let a = p.record(Mode::Cash, "RFI BTN", Grade::Good, 0.0);
         assert!(a.goal_reached_now);
         assert_eq!(p.streak, 2);
         p.record(Mode::Cash, "RFI BTN", Grade::Inaccuracy, 0.0);
         assert_eq!(p.streak, 2, "inaccuracies neither build nor break the streak");
-        p.record(Mode::Postflop, "Flop", Grade::Blunder, 3.5);
+        let a = p.record(Mode::Postflop, "Flop", Grade::Blunder, 3.5);
+        assert_eq!((a.streak_before, a.streak), (2, 0), "a streak of 2 was lost");
         assert_eq!(p.streak, 0);
         assert_eq!(p.best_streak, 2);
+        let a = p.record(Mode::Postflop, "Flop", Grade::Mistake, 1.0);
+        assert_eq!((a.streak_before, a.streak), (0, 0), "no streak to lose");
         let c = &p.categories["RFI BTN"];
         assert_eq!(c.decisions, 3);
         assert_eq!(c.accuracy(), Some(2.0 / 3.0));
-        assert_eq!(p.mode_stats(Mode::Postflop).ev_loss, 3.5);
-        assert_eq!(p.today_count(), 4);
+        assert_eq!(p.mode_stats(Mode::Postflop).ev_loss, 4.5);
+        assert_eq!(p.today_count(), 5);
         assert_eq!(p.day_streak(), 1);
     }
 

@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use holdem_solver::card::Card;
 use holdem_solver::postflop::PostflopConfig;
-use holdem_solver::preflop::{PNode, PreflopConfig, PreflopTree};
+use holdem_solver::preflop::{PKind, PNode, PreflopConfig, PreflopTree};
 use holdem_solver::range::NUM_CLASSES;
 use serde::{Deserialize, Serialize};
 
@@ -70,6 +70,34 @@ impl LoadedPreflop {
         let na = node.num_children as usize;
         let base = node.storage as usize + class * na;
         dequantize(&self.pack.strategy[base..base + na])
+    }
+
+    /// For every hand class: the probability that `seat`'s own earlier actions
+    /// on the way to node `idx` are what the solution does with that class
+    /// (the product of their frequencies; 1.0 before the seat's first decision).
+    /// The solver never trains a class at a node its owner does not reach, so
+    /// the stored strategy there means nothing when this is (near) zero.
+    pub fn own_reach(&self, idx: usize, seat: usize) -> Vec<f32> {
+        let nodes = &self.tree.nodes;
+        let mut reach = vec![1.0f32; NUM_CLASSES];
+        let mut idx = idx;
+        while idx != 0 {
+            let parent = &nodes[nodes[idx].parent as usize];
+            if parent.kind == PKind::Decision(seat as u8) {
+                let i = idx - parent.first_child as usize;
+                for (class, r) in reach.iter_mut().enumerate() {
+                    *r *= self.strategy(parent, class)[i];
+                }
+            }
+            idx = nodes[idx].parent as usize;
+        }
+        reach
+    }
+
+    /// Stack depth as push/fold charts count it: chips before posting the
+    /// ante (the pack's `config.stack` is what is left behind after it).
+    pub fn nominal_stack(&self) -> f64 {
+        self.pack.config.stack + self.pack.config.ante
     }
 }
 
@@ -162,7 +190,7 @@ pub struct FlopLibrary {
 /// Everything the app trains on.
 pub struct Content {
     pub cash: Arc<LoadedPreflop>,
-    /// Push/fold packs sorted by stack depth.
+    /// Push/fold packs sorted by nominal stack depth.
     pub pushfold: Vec<Arc<LoadedPreflop>>,
     pub flops: Arc<FlopLibrary>,
 }
@@ -178,15 +206,16 @@ pub fn decode<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T, String> {
 impl Content {
     pub fn from_bytes(cash: &[u8], pushfold: &[u8], flops: &[u8]) -> Result<Self, String> {
         let cash = Arc::new(LoadedPreflop::new(decode::<PreflopPack>(cash)?)?);
-        let mut packs: Vec<PreflopPack> = decode(pushfold)?;
-        packs.sort_by(|a, b| a.config.stack.partial_cmp(&b.config.stack).unwrap());
-        let pushfold = packs.into_iter().map(|p| LoadedPreflop::new(p).map(Arc::new)).collect::<Result<_, _>>()?;
+        let packs: Vec<PreflopPack> = decode(pushfold)?;
+        let mut pushfold: Vec<Arc<LoadedPreflop>> = packs.into_iter().map(|p| LoadedPreflop::new(p).map(Arc::new)).collect::<Result<_, _>>()?;
+        pushfold.sort_by(|a, b| a.nominal_stack().partial_cmp(&b.nominal_stack()).unwrap());
         let flops = Arc::new(decode::<FlopLibrary>(flops)?);
         Ok(Content { cash, pushfold, flops })
     }
 
+    /// Nominal stack depth of each push/fold pack, ascending.
     pub fn pushfold_stacks(&self) -> Vec<f64> {
-        self.pushfold.iter().map(|p| p.pack.config.stack).collect()
+        self.pushfold.iter().map(|p| p.nominal_stack()).collect()
     }
 }
 

@@ -3,6 +3,7 @@
 use eframe::egui::{self, Align2, Color32, Pos2, Rect, Response, Rounding, Sense, Shape, Stroke, Ui, Vec2, pos2, vec2};
 use holdem_solver::card::{Card, RANK_CHARS, rank, suit};
 use holdem_solver::range::{NUM_CLASSES, class_name};
+use holdem_trainer::quiz::{MIN_REACH, RangeGrid};
 
 use super::theme::{self, *};
 
@@ -267,7 +268,7 @@ pub fn panel_frame(fill: Color32) -> egui::Frame {
 
 pub fn stat_tile(ui: &mut Ui, title: &str, value: &str, sub: &str, accent: Color32, width: f32) {
     panel_frame(PANEL).show(ui, |ui| {
-        ui.set_width(width - 34.0);
+        ui.set_width(width - 32.0);
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
             ui.label(egui::RichText::new(title).font(theme::font(12.5)).color(TEXT_DIM));
@@ -305,35 +306,44 @@ pub fn freq_bars(ui: &mut Ui, labels: &[String], freqs: &[f32], styles: &[ActSty
     }
 }
 
-/// The 13x13 hand grid colored by each class's action mix.
-pub fn range_grid(ui: &mut Ui, grid: &[Vec<f32>], styles: &[ActStyle], highlight: Option<usize>, cell: f32) -> Response {
+/// The 13x13 hand grid colored by each class's action mix. The colored part of
+/// a cell is as tall as the class's reach (how often the player's own earlier
+/// actions bring it here); classes below [`MIN_REACH`] are drawn as not in range.
+pub fn range_grid(ui: &mut Ui, grid: &RangeGrid, styles: &[ActStyle], cell: f32) -> Response {
     let size = vec2(13.0 * cell, 13.0 * cell);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::hover());
     let p = ui.painter();
     p.rect_filled(rect.expand(2.0), Rounding::same(6.0), Color32::from_rgb(9, 15, 26));
+    let font = theme::semibold((cell * 0.36).max(9.0));
     for class in 0..NUM_CLASSES {
         let (row, col) = (class / 13, class % 13);
         let r = Rect::from_min_size(rect.min + vec2(col as f32 * cell, row as f32 * cell), Vec2::splat(cell)).shrink(0.6);
-        let mix = &grid[class];
+        let reach = grid.reach[class].clamp(0.0, 1.0);
+        p.rect_filled(r, Rounding::ZERO, OUT_OF_RANGE);
+        let name = class_name(class);
+        if reach < MIN_REACH {
+            p.text(r.center(), Align2::CENTER_CENTER, name, font.clone(), TEXT_FAINT.gamma_multiply(0.6));
+            continue;
+        }
+        // The fill grows from the bottom; paint the aggressive actions first (left), like most solvers.
+        let top = r.bottom() - r.height() * reach;
+        let mix = &grid.strategy[class];
         let mut x = r.left();
-        // Paint the aggressive actions first (left), like most solvers.
-        let order: Vec<usize> = (0..mix.len()).rev().collect();
-        for &a in &order {
+        for a in (0..mix.len()).rev() {
             let w = r.width() * mix[a];
             if w > 0.2 {
-                p.rect_filled(Rect::from_min_max(pos2(x, r.top()), pos2((x + w).min(r.right()), r.bottom())), Rounding::ZERO, act_color(styles[a]));
+                p.rect_filled(Rect::from_min_max(pos2(x, top), pos2((x + w).min(r.right()), r.bottom())), Rounding::ZERO, act_color(styles[a]));
             }
             x += w;
         }
-        let name = class_name(class);
-        p.text(r.center(), Align2::CENTER_CENTER, name, theme::semibold(cell * 0.3), Color32::from_white_alpha(225));
+        p.text(r.center() + vec2(0.6, 0.7), Align2::CENTER_CENTER, &name, font.clone(), Color32::from_black_alpha(170));
+        p.text(r.center(), Align2::CENTER_CENTER, name, font.clone(), Color32::WHITE);
     }
-    if let Some(h) = highlight {
-        let (row, col) = (h / 13, h % 13);
-        let r = Rect::from_min_size(rect.min + vec2(col as f32 * cell, row as f32 * cell), Vec2::splat(cell));
-        p.rect_stroke(r.expand(1.0), Rounding::same(3.0), Stroke::new(3.0_f32, Color32::WHITE));
-        p.rect_stroke(r.expand(3.0), Rounding::same(4.0), Stroke::new(1.5_f32, GOLD));
-    }
+    let h = grid.hero_class;
+    let (row, col) = (h / 13, h % 13);
+    let r = Rect::from_min_size(rect.min + vec2(col as f32 * cell, row as f32 * cell), Vec2::splat(cell));
+    p.rect_stroke(r.expand(1.0), Rounding::same(3.0), Stroke::new(3.0_f32, Color32::WHITE));
+    p.rect_stroke(r.expand(3.0), Rounding::same(4.0), Stroke::new(1.5_f32, GOLD));
     resp
 }
 

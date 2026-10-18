@@ -78,7 +78,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     ui.vertical(|ui| {
                         ui.set_width(left_w);
                         widgets::panel_frame(PANEL).show(ui, |ui| {
-                            ui.set_width(left_w - 34.0);
+                            ui.set_width(left_w - 32.0);
                             widgets::section_title(ui, "By drill");
                             ui.add_space(4.0);
                             for (m, s) in &modes {
@@ -94,7 +94,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                                         ui.label(egui::RichText::new(extra).font(theme::font(12.5)).color(TEXT_DIM));
                                     });
                                 });
-                                grade_bar(ui, s, left_w - 34.0, 12.0);
+                                grade_bar(ui, s, left_w - 32.0, 12.0);
                                 ui.add_space(8.0);
                             }
                             ui.horizontal_wrapped(|ui| {
@@ -107,17 +107,17 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         });
                         ui.add_space(gap);
                         widgets::panel_frame(PANEL).show(ui, |ui| {
-                            ui.set_width(left_w - 34.0);
+                            ui.set_width(left_w - 32.0);
                             widgets::section_title(ui, "Last 14 days");
                             ui.add_space(6.0);
-                            activity_chart(ui, app, left_w - 34.0);
+                            activity_chart(ui, app, left_w - 32.0);
                         });
                     });
                     ui.vertical(|ui| {
                         ui.set_width(right_w);
                         widgets::panel_frame(PANEL).show(ui, |ui| {
-                            ui.set_width(right_w - 34.0);
-                            categories(ui, app, right_w - 34.0);
+                            ui.set_width(right_w - 32.0);
+                            categories(ui, app, right_w - 32.0);
                         });
                     });
                 });
@@ -206,8 +206,8 @@ fn categories(ui: &mut egui::Ui, app: &App, width: f32) {
     cats.sort_by(|a, b| leak(a.1).partial_cmp(&leak(b.1)).unwrap_or(std::cmp::Ordering::Equal).then(b.1.decisions.cmp(&a.1.decisions)));
     ui.label(egui::RichText::new("Weakest spots first (with at least 10 decisions).").font(theme::font(12.0)).color(TEXT_FAINT));
     ui.add_space(4.0);
-    let name_w = width * 0.36;
-    let bar_w = width * 0.36;
+    let name_w = width * 0.44;
+    let bar_w = width * 0.30;
     for (name, s) in cats.iter().take(16) {
         ui.horizontal(|ui| {
             ui.allocate_ui(vec2(name_w, 22.0), |ui| {

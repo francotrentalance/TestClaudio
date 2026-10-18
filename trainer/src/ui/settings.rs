@@ -4,7 +4,7 @@ use eframe::egui::{self, Margin};
 use holdem_trainer::gen::{SRP, THREE_BET, spot_label};
 use holdem_trainer::profile::{Profile, Settings};
 
-use super::app::App;
+use super::app::{App, snap_stack};
 use super::home::centered;
 use super::theme::{self, *};
 use super::widgets;
@@ -83,14 +83,24 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 });
 
                 card(ui, "Push / Fold", |ui| {
-                    let lo = stacks.first().copied().unwrap_or(5.0);
-                    let hi = stacks.last().copied().unwrap_or(20.0);
-                    row(ui, "Stack range", "Effective stacks in big blinds.", |ui| {
+                    row(ui, "Stack range", "Effective stacks in big blinds, before the ante.", |ui| {
+                        if stacks.is_empty() {
+                            return;
+                        }
                         ui.spacing_mut().slider_width = 130.0;
-                        ui.label("from");
-                        ui.add(egui::Slider::new(&mut s.pushfold_min, lo..=hi).step_by(1.0).fixed_decimals(0).suffix(" bb"));
-                        ui.label("to");
-                        ui.add(egui::Slider::new(&mut s.pushfold_max, lo..=hi).step_by(1.0).fixed_decimals(0).suffix(" bb"));
+                        // The sliders step through the shipped depths only, so every choice has a chart.
+                        let index = |x: f64| stacks.iter().position(|&v| v == snap_stack(&stacks, x)).unwrap_or(0);
+                        let last = stacks.len() - 1;
+                        for (label, value) in [("from", &mut s.pushfold_min), ("to", &mut s.pushfold_max)] {
+                            ui.label(label);
+                            let mut i = index(*value);
+                            ui.add(
+                                egui::Slider::new(&mut i, 0..=last)
+                                    .custom_formatter(|v, _| format!("{} bb", stacks[(v as usize).min(last)]))
+                                    .custom_parser(|t| t.trim().trim_end_matches("bb").trim().parse::<f64>().ok().map(|x| index(x) as f64)),
+                            );
+                            *value = stacks[i.min(last)];
+                        }
                     });
                     if s.pushfold_min > s.pushfold_max {
                         std::mem::swap(&mut s.pushfold_min, &mut s.pushfold_max);
@@ -159,11 +169,12 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 });
 
                 card(ui, "About the solutions", |ui| {
-                    let text = "Preflop strategies come from a 6-max equilibrium solved with Monte Carlo CFR; postflop pots after \
-                                the flop are valued with an equity-realization model, so treat close preflop mixes as approximate. \
-                                Push/fold charts are solved for each stack depth with antes. Postflop spots are solved exactly on \
-                                each stored flop, and the turn and river are re-solved live for the board that comes. Opponents \
-                                always play the solution, sampled from its mixed strategy.";
+                    let text = "Preflop Cash strategies come from a 6-max solve with Monte Carlo CFR in which every flop is \
+                                valued with equity-realization factors measured from postflop solves. They approximate full-game \
+                                play, so treat close preflop mixes as approximate. Push/fold charts are solved for each stack depth, \
+                                with every player posting an ante of 12.5% of the big blind. Postflop spots are solved on each \
+                                stored flop, and the turn and river are re-solved live for the board that comes. Everything is \
+                                solved without rake (chip EV). Opponents always play the solution, sampled from its mixed strategy.";
                     ui.label(egui::RichText::new(text).font(theme::font(13.5)).color(TEXT_DIM));
                     ui.add_space(4.0);
                     ui.label(egui::RichText::new(format!("Hold'em Trainer {}", env!("CARGO_PKG_VERSION"))).font(theme::font(12.0)).color(TEXT_FAINT));
@@ -178,7 +189,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         app.session = None;
     }
     if reset || settings_changed(&before, &app.profile.settings) {
-        app.save_error = app.profile.save().err().map(|e| e.to_string());
+        app.save();
     }
 }
 
