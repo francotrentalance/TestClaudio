@@ -261,3 +261,41 @@ fn explorer_equity_matches_equity_module() {
         assert!((eq[h] as f64 - e).abs() < 1e-4, "combo {combo}: {} vs {e}", eq[h]);
     }
 }
+
+/// Each action's EV, weighted by the strategy, adds up to the hand's EV at the node.
+#[test]
+fn action_evs_average_to_node_ev() {
+    use holdem_solver::postflop::explore::Explorer;
+    let mut g = PostflopGame::new(river_toy("50%,100%")).unwrap();
+    for _ in 0..500 {
+        g.iterate();
+    }
+    let mut ex = Explorer::new(&g);
+    ex.take_action(0); // OOP checks; IP to act with check / 50% / 100%.
+    let nh = g.num_hands(1);
+    let strat = ex.strategy();
+    let evs = ex.action_evs();
+    assert_eq!(evs.len(), 3);
+    let node_ev = ex.hand_stats(1).ev;
+    for h in 0..nh {
+        let mixed: f32 = (0..evs.len()).map(|a| strat[a * nh + h] * evs[a][h]).sum();
+        assert!((mixed - node_ev[h]).abs() < 1e-3, "hand {h}: {mixed} vs {}", node_ev[h]);
+    }
+}
+
+/// Solving with explicit range weights is the same as solving from the range strings.
+#[test]
+fn explicit_ranges_match_range_strings() {
+    use holdem_solver::range::Range;
+    let cfg = river_toy("100%");
+    let ranges = [Range::parse(&cfg.oop_range).unwrap(), Range::parse(&cfg.ip_range).unwrap()];
+    let mut a = PostflopGame::new(cfg.clone()).unwrap();
+    let mut b = PostflopGame::with_ranges(cfg, ranges).unwrap();
+    for _ in 0..200 {
+        a.iterate();
+        b.iterate();
+    }
+    assert_eq!(a.hands, b.hands);
+    let (ea, eb) = (a.expected_values(), b.expected_values());
+    assert!((ea[0] - eb[0]).abs() < 1e-6 && (ea[1] - eb[1]).abs() < 1e-6, "{ea:?} vs {eb:?}");
+}

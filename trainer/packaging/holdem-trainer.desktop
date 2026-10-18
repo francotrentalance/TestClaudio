@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Hold'em Trainer
+GenericName=Poker Trainer
+Comment=Train 6-max No-Limit Hold'em decisions against solver strategies
+Exec=holdem-trainer
+Icon=holdem-trainer
+Terminal=false
+Categories=Game;CardGame;
+Keywords=poker;holdem;hold'em;gto;solver;trainer;
+StartupNotify=true
+StartupWMClass=holdem-trainer

@@ -81,7 +81,7 @@ struct Setup {
     sym_pairs: [bool; 6],
 }
 
-fn setup(config: &PostflopConfig) -> Result<Setup, String> {
+fn setup(config: &PostflopConfig, ranges: Option<&[Range; 2]>) -> Result<Setup, String> {
     let board = parse_cards(&config.board)?;
     if !(3..=5).contains(&board.len()) {
         return Err(format!("board must have 3 to 5 cards, got {}", board.len()));
@@ -89,7 +89,10 @@ fn setup(config: &PostflopConfig) -> Result<Setup, String> {
     if config.pot <= 0.0 || config.stack < 0.0 {
         return Err("pot must be positive and stack non-negative".into());
     }
-    let ranges = [Range::parse(&config.oop_range)?, Range::parse(&config.ip_range)?];
+    let ranges = match ranges {
+        Some(r) => r.clone(),
+        None => [Range::parse(&config.oop_range)?, Range::parse(&config.ip_range)?],
+    };
     let board_mask = cards_mask(&board);
     let mut hands: [Vec<(Card, Card)>; 2] = [Vec::new(), Vec::new()];
     let mut weights: [Vec<f32>; 2] = [Vec::new(), Vec::new()];
@@ -123,7 +126,7 @@ fn setup(config: &PostflopConfig) -> Result<Setup, String> {
 
 /// Builds the tree without allocating storage, to report its size.
 pub fn tree_stats(config: &PostflopConfig) -> Result<TreeStats, String> {
-    let s = setup(config)?;
+    let s = setup(config, None)?;
     let num_hands = [s.hands[0].len(), s.hands[1].len()];
     let mut tb = TreeBuilder::new(config, num_hands, s.sym_pairs)?;
     tb.build(&s.board);
@@ -145,16 +148,23 @@ fn stats_of(nodes: &[Node], storage: u64, hands: [usize; 2], compressed: bool) -
 impl PostflopGame {
     /// Builds the game and allocates solver storage.
     pub fn new(config: PostflopConfig) -> Result<Self, String> {
-        Self::build(config, None)
+        Self::build(config, None, None)
+    }
+
+    /// Like [`PostflopGame::new`], with explicit per-combo range weights
+    /// (`[OOP, IP]`) instead of the config's range strings. Used to solve a
+    /// subgame whose ranges come from an earlier street's solution.
+    pub fn with_ranges(config: PostflopConfig, ranges: [Range; 2]) -> Result<Self, String> {
+        Self::build(config, None, Some(ranges))
     }
 
     /// Rebuilds a game from its config and attaches a saved average strategy.
     pub fn with_strategy(config: PostflopConfig, strategy: Vec<f32>) -> Result<Self, String> {
-        Self::build(config, Some(strategy))
+        Self::build(config, Some(strategy), None)
     }
 
-    fn build(config: PostflopConfig, strategy: Option<Vec<f32>>) -> Result<Self, String> {
-        let Setup { board, hands, weights, hand_index, sym_pairs } = setup(&config)?;
+    fn build(config: PostflopConfig, strategy: Option<Vec<f32>>, ranges: Option<[Range; 2]>) -> Result<Self, String> {
+        let Setup { board, hands, weights, hand_index, sym_pairs } = setup(&config, ranges.as_ref())?;
         let num_hands = [hands[0].len(), hands[1].len()];
         let mut tb = TreeBuilder::new(&config, num_hands, sym_pairs)?;
         tb.build(&board);

@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1f3050"/>
+      <stop offset="1" stop-color="#0c1422"/>
+    </linearGradient>
+    <radialGradient id="chip" cx="0.5" cy="0.38" r="0.65">
+      <stop offset="0" stop-color="#ee4a52"/>
+      <stop offset="1" stop-color="#b02631"/>
+    </radialGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="54" fill="url(#bg)"/>
+  <circle cx="128" cy="136" r="92" fill="#000" opacity="0.35"/>
+  <circle cx="128" cy="128" r="92" fill="url(#chip)"/>
+  <g fill="#f6f3ec">
+    <rect x="116" y="36" width="24" height="30" rx="5"/>
+    <rect x="116" y="36" width="24" height="30" rx="5" transform="rotate(45 128 128)"/>
+    <rect x="116" y="36" width="24" height="30" rx="5" transform="rotate(90 128 128)"/>
+    <rect x="116" y="36" width="24" height="30" rx="5" transform="rotate(135 128 128)"/>
+    <rect x="116" y="36" width="24" height="30" rx="5" transform="rotate(180 128 128)"/>
+    <rect x="116" y="36" width="24" height="30" rx="5" transform="rotate(225 128 128)"/>
+    <rect x="116" y="36" width="24" height="30" rx="5" transform="rotate(270 128 128)"/>
+    <rect x="116" y="36" width="24" height="30" rx="5" transform="rotate(315 128 128)"/>
+  </g>
+  <circle cx="128" cy="128" r="58" fill="#f6f3ec"/>
+  <circle cx="128" cy="128" r="58" fill="none" stroke="#f5b83d" stroke-width="5"/>
+  <path fill="#1c1e26" d="M128 84 C128 84 92 112 88 131 C84 150 102 162 119 153 C117 162 112 170 105 174 L151 174 C144 170 139 162 137 153 C154 162 172 150 168 131 C164 112 128 84 128 84 Z"/>
+</svg>

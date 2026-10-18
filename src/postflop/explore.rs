@@ -275,6 +275,27 @@ impl<'a> Explorer<'a> {
         HandStats { ev, equity: self.equity(p) }
     }
 
+    /// Expected value of each action for each hand of the player to act, in
+    /// chips relative to this node (`[action][hand]`), with both players
+    /// following the average strategy afterwards. The difference between two
+    /// actions' values is what choosing one over the other costs that hand.
+    pub fn action_evs(&self) -> Vec<Vec<f32>> {
+        let node = self.node();
+        let NodeKind::Player(q) = node.kind else { return Vec::new() };
+        let q = q as usize;
+        let f = self.frame();
+        let valid = self.valid_opp(q);
+        node.children()
+            .map(|c| {
+                let cfv = self.game.recurse(c, q, &f.reach[q], &f.reach[1 - q], f.dealt, Mode::Average);
+                cfv.iter()
+                    .zip(&valid)
+                    .map(|(&v, &w)| if w > 0.0 { v / w + node.contrib[q] } else { f32::NAN })
+                    .collect()
+            })
+            .collect()
+    }
+
     /// All-in equity of each of `p`'s hands against the opponent's reach,
     /// averaged over every remaining runout.
     pub fn equity(&self, p: usize) -> Vec<f32> {
