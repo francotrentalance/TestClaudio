@@ -301,18 +301,19 @@ pub fn turn_config(spot: &FlopSpot, line: &FlopLine, turn: Card) -> PostflopConf
 // Equity realization, measured from postflop solves for the preflop model.
 
 /// Per-class totals over solved flops, per player `[OOP, IP]`: range weight,
-/// weighted EV and weighted equity share of the pot at the flop.
-#[derive(Clone, Debug)]
+/// weighted EV and weighted equity share of the pot at the flop (`pot` chips).
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct EqrSums {
+    pub pot: f64,
     pub weight: [Vec<f64>; 2],
     pub ev: [Vec<f64>; 2],
     pub equity_pot: [Vec<f64>; 2],
 }
 
-impl Default for EqrSums {
-    fn default() -> Self {
+impl EqrSums {
+    pub fn new(pot: f64) -> Self {
         let z = || vec![0.0; NUM_CLASSES];
-        EqrSums { weight: [z(), z()], ev: [z(), z()], equity_pot: [z(), z()] }
+        EqrSums { pot, weight: [z(), z()], ev: [z(), z()], equity_pot: [z(), z()] }
     }
 }
 
@@ -333,16 +334,26 @@ pub fn sample_flops(n: usize, seed: u64) -> Vec<String> {
         .collect()
 }
 
-/// Solves `kind` on `board` with `ranges` (to a looser target than the
+/// Range weight of hands outside a range while measuring realization.
+const EQR_PROBE: f32 = 0.02;
+/// Classes with less total weight than this (in combo-flops) are not measured.
+const EQR_MIN_WEIGHT: f64 = 0.5;
+const EXCESS_CLAMP: f32 = 0.9;
+
+/// The spot's ranges with every hand outside them at [`EQR_PROBE`] weight: too
+/// small to move the equilibrium, but the solver then also works out how each
+/// of those hands would play and realize there, so no class has to be guessed.
+pub fn probe_ranges(kind: &str, ranges: &SpotRanges) -> Result<[Range; 2], String> {
+    let probe = |r: &Range| Range { weights: r.weights.iter().map(|&w| w.max(EQR_PROBE)).collect() };
+    let [oop, ip] = ranges.of(kind)?;
+    Ok([probe(oop), probe(ip)])
+}
+
+/// Solves `kind` on `board` with the probe ranges (to a looser target than the
 /// training library) and adds every hand's EV and equity at the flop to `sums`.
 pub fn measure_eqr(kind: &str, board: &str, ranges: &SpotRanges, sums: &mut EqrSums, mut log: impl FnMut(&str)) -> Result<f64, String> {
     let config = PostflopConfig { iterations: 200, target_exploitability: 2.0, ..spot_config(kind, board)? };
-    // Every hand outside the range gets a tiny "probe" weight: too small to move
-    // the equilibrium, but the solver then also works out how each of those
-    // hands would play and realize there, so no class has to be guessed.
-    let probe = |r: &Range| Range { weights: r.weights.iter().map(|&w| w.max(EQR_PROBE)).collect() };
-    let [oop, ip] = ranges.of(kind)?;
-    let mut game = PostflopGame::with_ranges(config.clone(), [probe(oop), probe(ip)])?;
+    let mut game = PostflopGame::with_ranges(config.clone(), probe_ranges(kind, ranges)?)?;
     let expl = solve_postflop(&mut game, &config, &mut log);
     let ex = Explorer::new(&game);
     let pot = config.pot;
@@ -363,20 +374,46 @@ pub fn measure_eqr(kind: &str, board: &str, ranges: &SpotRanges, sums: &mut EqrS
     Ok(expl)
 }
 
-/// Range weight of hands outside a range while measuring realization.
-const EQR_PROBE: f32 = 0.02;
-/// Classes with less total weight than this (in combo-flops) are not measured.
-const EQR_MIN_WEIGHT: f64 = 0.5;
-const EQR_CLAMP: (f32, f32) = (0.2, 2.0);
+/// Rebuilds the sums of a run that only saved multiplicative realization
+/// factors (`ev / (equity * pot)` per class): the range weights and equities
+/// are recomputed exactly on the same flops, and EV = factor * equity * pot.
+pub fn eqr_sums_from_factors(kind: &str, flops: &[String], ranges: &SpotRanges, factors: [&[f32]; 2]) -> Result<EqrSums, String> {
+    let pot = spot_config(kind, "Ks7d2c")?.pot;
+    let mut sums = EqrSums::new(pot);
+    let [oop, ip] = probe_ranges(kind, ranges)?;
+    for board in flops {
+        let cards = parse_cards(board)?;
+        let res = holdem_solver::equity::range_vs_range(&oop, &ip, &cards, 0, 0);
+        for (p, range) in [&oop, &ip].into_iter().enumerate() {
+            for &(combo, eq, _) in &res.hands[p] {
+                let w = range.weights[combo] as f64;
+                let c = combo_class(combo);
+                sums.weight[p][c] += w;
+                sums.equity_pot[p][c] += w * eq * pot;
+            }
+        }
+    }
+    for p in 0..2 {
+        for c in 0..NUM_CLASSES {
+            sums.ev[p][c] = factors[p][c] as f64 * sums.equity_pot[p][c];
+        }
+    }
+    Ok(sums)
+}
 
-/// Measured realization per class, `None` where the class was (almost) never in range.
-pub fn eqr_measured(sums: &EqrSums, p: usize) -> Vec<Option<f32>> {
-    (0..NUM_CLASSES)
+/// Excess pot share per class (`None` where the class was almost never in
+/// range) and the range's average excess share.
+pub fn eqr_excess(sums: &EqrSums, p: usize) -> (Vec<Option<f32>>, f32) {
+    let total_w: f64 = sums.weight[p].iter().sum();
+    let total_x: f64 = (0..NUM_CLASSES).map(|c| sums.ev[p][c] - sums.equity_pot[p][c]).sum();
+    let mean = if total_w > 0.0 { (total_x / (sums.pot * total_w)) as f32 } else { 0.0 };
+    let x = (0..NUM_CLASSES)
         .map(|c| {
-            (sums.weight[p][c] >= EQR_MIN_WEIGHT && sums.equity_pot[p][c] > 0.0)
-                .then(|| ((sums.ev[p][c] / sums.equity_pot[p][c]) as f32).clamp(EQR_CLAMP.0, EQR_CLAMP.1))
+            (sums.weight[p][c] >= EQR_MIN_WEIGHT)
+                .then(|| ((sums.ev[p][c] - sums.equity_pot[p][c]) / (sums.pot * sums.weight[p][c])) as f32)
         })
-        .collect()
+        .collect();
+    (x, mean)
 }
 
 /// Fills unmeasured classes from the closest measured class of the same
@@ -384,7 +421,7 @@ pub fn eqr_measured(sums: &EqrSums, p: usize) -> Vec<Option<f32>> {
 fn fill_nearest(measured: &[Option<f32>]) -> Vec<f32> {
     let mean = {
         let v: Vec<f32> = measured.iter().flatten().copied().collect();
-        if v.is_empty() { 1.0 } else { v.iter().sum::<f32>() / v.len() as f32 }
+        if v.is_empty() { 0.0 } else { v.iter().sum::<f32>() / v.len() as f32 }
     };
     let shape = |c: usize| {
         let (h, l, s) = class_ranks(c);
@@ -416,27 +453,43 @@ fn fill_nearest(measured: &[Option<f32>]) -> Vec<f32> {
 }
 
 /// Builds the preflop model from realization measured in single-raised
-/// (`deep`) and 3-bet (`shallow`) pots. With probe weights every class is
-/// normally measured; any that is not falls back to a least-squares line
-/// through the classes measured in both (shallow) or its nearest measured
-/// neighbour (deep).
+/// (`deep`) and 3-bet (`shallow`) pots. Tables hold each class's excess share
+/// minus its range's average. With probe weights every class is normally
+/// measured; any that is not falls back to its nearest measured neighbour
+/// (deep) or a least-squares line through the classes measured in both
+/// (shallow).
 pub fn eqr_model(deep: &EqrSums, shallow: &EqrSums, deep_spr: f64, shallow_spr: f64) -> EqrModel {
     let mut tables = Vec::new();
+    let mut means = [[0.0f32; 2]; 2];
     for p in 0..2 {
-        let d = fill_nearest(&eqr_measured(deep, p));
-        let s = eqr_measured(shallow, p);
+        let (dx, dm) = eqr_excess(deep, p);
+        let (sx, sm) = eqr_excess(shallow, p);
+        means[0][p] = dm;
+        means[1][p] = sm;
+        let centre = |v: Vec<Option<f32>>, m: f32| -> Vec<Option<f32>> { v.into_iter().map(|x| x.map(|x| x - m)).collect() };
+        let d = fill_nearest(&centre(dx, dm));
+        let s = centre(sx, sm);
         let pairs: Vec<(f64, f64)> = (0..NUM_CLASSES).filter_map(|c| s[c].map(|x| (d[c] as f64, x as f64))).collect();
         let n = pairs.len() as f64;
         let (mx, my) = (pairs.iter().map(|q| q.0).sum::<f64>() / n.max(1.0), pairs.iter().map(|q| q.1).sum::<f64>() / n.max(1.0));
         let sxx: f64 = pairs.iter().map(|q| (q.0 - mx) * (q.0 - mx)).sum();
         let sxy: f64 = pairs.iter().map(|q| (q.0 - mx) * (q.1 - my)).sum();
         let slope = if sxx > 0.0 { (sxy / sxx).clamp(0.0, 1.5) } else { 0.0 };
-        let fit = |x: f32| ((my + slope * (x as f64 - mx)) as f32).clamp(EQR_CLAMP.0, EQR_CLAMP.1);
-        let s: Vec<f32> = (0..NUM_CLASSES).map(|c| s[c].unwrap_or_else(|| if pairs.is_empty() { 1.0 } else { fit(d[c]) })).collect();
-        tables.push((d, s));
+        let s: Vec<f32> = (0..NUM_CLASSES).map(|c| s[c].unwrap_or((my + slope * (d[c] as f64 - mx)) as f32)).collect();
+        let clamp = |v: Vec<f32>| -> Vec<f32> { v.into_iter().map(|x| x.clamp(-EXCESS_CLAMP, EXCESS_CLAMP)).collect() };
+        tables.push((clamp(d), clamp(s)));
     }
     let (ip, oop) = (tables.pop().unwrap(), tables.pop().unwrap());
-    EqrModel { deep_spr, shallow_spr, deep_oop: oop.0, deep_ip: ip.0, shallow_oop: oop.1, shallow_ip: ip.1 }
+    EqrModel {
+        deep_spr,
+        shallow_spr,
+        deep_oop: oop.0,
+        deep_ip: ip.0,
+        shallow_oop: oop.1,
+        shallow_ip: ip.1,
+        deep_mean: means[0],
+        shallow_mean: means[1],
+    }
 }
 
 /// Stack-to-pot ratio at the flop of a spot.

@@ -163,10 +163,12 @@ fn flop_terminals_get_eqr_mix_and_positions() {
     let eqr = EqrModel {
         deep_spr: 97.5 / 5.5,
         shallow_spr: 90.0 / 20.5,
-        deep_oop: vec![1.0; n],
-        deep_ip: vec![1.0; n],
-        shallow_oop: vec![1.0; n],
-        shallow_ip: vec![1.0; n],
+        deep_oop: vec![0.0; n],
+        deep_ip: vec![0.0; n],
+        shallow_oop: vec![0.0; n],
+        shallow_ip: vec![0.0; n],
+        deep_mean: [0.0; 2],
+        shallow_mean: [0.0; 2],
     };
     let cfg = PreflopConfig { eqr: Some(eqr), ..PreflopConfig::default() };
     let tree = PreflopTree::build(&cfg).unwrap();

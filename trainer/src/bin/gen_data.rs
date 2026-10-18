@@ -1,6 +1,7 @@
 //! Generates the content shipped with the app.
 //!
 //!   gen-data eqr      <ranges> <out.json> [flops]      measure equity realization
+//!   gen-data eqr-rebuild <factors.json> <ranges> <flops> <out.json>
 //!   gen-data cash     <iterations> <out.bin> [eqr.json]
 //!   gen-data pushfold <iterations> <out.bin>
 //!   gen-data flops    <kind> <out.bin> <ranges> [board ...]   (resumable: skips boards already in out.bin)
@@ -90,18 +91,47 @@ fn report(pack: &LoadedPreflop) {
     show("SB vs CO".into(), sb);
 }
 
+/// Builds the realization model from measured sums, writes it and prints it.
+fn write_eqr(path: &str, deep: &gen::EqrSums, shallow: &gen::EqrSums) {
+    let model = gen::eqr_model(deep, shallow, gen::spot_spr(SRP).unwrap(), gen::spot_spr(THREE_BET).unwrap());
+    model.validate().expect("model");
+    std::fs::write(path, serde_json::to_string_pretty(&model).unwrap()).expect("write");
+    let measured = [gen::eqr_excess(deep, 0).0, gen::eqr_excess(deep, 1).0, gen::eqr_excess(shallow, 0).0, gen::eqr_excess(shallow, 1).0];
+    eprintln!(
+        "excess pot share, centred on the range (* = filled in); range means: deep OOP {:+.3} IP {:+.3}, shallow OOP {:+.3} IP {:+.3}",
+        model.deep_mean[0], model.deep_mean[1], model.shallow_mean[0], model.shallow_mean[1]
+    );
+    eprintln!("class   deep OOP  deep IP  shallow OOP  shallow IP");
+    for c in 0..NUM_CLASSES {
+        let mark = |k: usize| if measured[k][c].is_some() { ' ' } else { '*' };
+        eprintln!(
+            "{:5} {:+8.3}{} {:+8.3}{} {:+10.3}{} {:+10.3}{}",
+            class_name(c),
+            model.deep_oop[c],
+            mark(0),
+            model.deep_ip[c],
+            mark(1),
+            model.shallow_oop[c],
+            mark(2),
+            model.shallow_ip[c],
+            mark(3)
+        );
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let start = Instant::now();
     match args.first().map(String::as_str) {
         Some("eqr") => {
+            // gen-data eqr <ranges> <out.json> [flops]; the raw sums go to <out.json>.sums.json.
             let ranges = spot_ranges(&args[1]);
             print_ranges(&ranges);
             let n: usize = args.get(3).map(|s| s.parse().expect("flops")).unwrap_or(30);
             let flops = gen::sample_flops(n, 2026);
             let mut sums = Vec::new();
             for kind in [SRP, THREE_BET] {
-                let mut s = gen::EqrSums::default();
+                let mut s = gen::EqrSums::new(gen::spot_config(kind, "Ks7d2c").unwrap().pot);
                 for (i, board) in flops.iter().enumerate() {
                     let t = Instant::now();
                     let mut last = String::new();
@@ -110,32 +140,27 @@ fn main() {
                 }
                 sums.push(s);
             }
-            let model = gen::eqr_model(&sums[0], &sums[1], gen::spot_spr(SRP).unwrap(), gen::spot_spr(THREE_BET).unwrap());
-            model.validate().expect("model");
-            std::fs::write(&args[2], serde_json::to_string_pretty(&model).unwrap()).expect("write");
-            let measured = [
-                gen::eqr_measured(&sums[0], 0),
-                gen::eqr_measured(&sums[0], 1),
-                gen::eqr_measured(&sums[1], 0),
-                gen::eqr_measured(&sums[1], 1),
-            ];
-            eprintln!("class   deep OOP  deep IP  shallow OOP  shallow IP   (* = filled in, not measured)");
-            for c in 0..NUM_CLASSES {
-                let mark = |k: usize| if measured[k][c].is_some() { ' ' } else { '*' };
-                eprintln!(
-                    "{:5} {:8.3}{} {:8.3}{} {:10.3}{} {:10.3}{}",
-                    class_name(c),
-                    model.deep_oop[c],
-                    mark(0),
-                    model.deep_ip[c],
-                    mark(1),
-                    model.shallow_oop[c],
-                    mark(2),
-                    model.shallow_ip[c],
-                    mark(3)
-                );
-            }
+            std::fs::write(format!("{}.sums.json", args[2]), serde_json::to_string(&sums).unwrap()).expect("write");
+            write_eqr(&args[2], &sums[0], &sums[1]);
             eprintln!("eqr: wrote {} ({:.0}s)", args[2], start.elapsed().as_secs_f64());
+        }
+        Some("eqr-rebuild") => {
+            // gen-data eqr-rebuild <factors.json> <ranges> <flops> <out.json>: from a run that saved
+            // multiplicative factors only (same flops and ranges as that run).
+            #[derive(serde::Deserialize)]
+            struct Factors {
+                deep_oop: Vec<f32>,
+                deep_ip: Vec<f32>,
+                shallow_oop: Vec<f32>,
+                shallow_ip: Vec<f32>,
+            }
+            let f: Factors = serde_json::from_str(&std::fs::read_to_string(&args[1]).expect("read")).expect("factors");
+            let ranges = spot_ranges(&args[2]);
+            let flops = gen::sample_flops(args[3].parse().expect("flops"), 2026);
+            let deep = gen::eqr_sums_from_factors(SRP, &flops, &ranges, [&f.deep_oop, &f.deep_ip]).expect("deep");
+            let shallow = gen::eqr_sums_from_factors(THREE_BET, &flops, &ranges, [&f.shallow_oop, &f.shallow_ip]).expect("shallow");
+            std::fs::write(format!("{}.sums.json", args[4]), serde_json::to_string(&[&deep, &shallow]).unwrap()).expect("write");
+            write_eqr(&args[4], &deep, &shallow);
         }
         Some("values") => {
             // gen-data values <cash.bin> <path> <class...>: EV of each action, e.g. path "F F F" = BTN to act.

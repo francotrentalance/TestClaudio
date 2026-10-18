@@ -140,19 +140,38 @@ impl Deal {
                 return e;
             }
         }
-        let exponent = cfg.realization_exponent as f32;
         let raw = self.raw_equity(active);
         let mut w = [0.0f32; MAX_PLAYERS];
         let mut sum = 0.0;
-        for p in 0..MAX_PLAYERS {
-            if active >> p & 1 == 1 {
-                let r = match &cfg.eqr {
-                    Some(m) => m.factor(node.eqr_mix, node.position[p], self.class[p]),
-                    None => node.realization[p],
-                };
-                let e = if exponent == 1.0 { raw[p] } else { raw[p].powf(exponent) };
-                w[p] = r * e;
-                sum += w[p];
+        if let Some(m) = &cfg.eqr {
+            // Additive excess shares (see EqrModel).
+            let (mut excess, mut mean) = ([0.0f32; MAX_PLAYERS], [0.0f32; MAX_PLAYERS]);
+            let (mut total_excess, mut total_mean, mut k) = (0.0f32, 0.0f32, 0.0f32);
+            for p in 0..MAX_PLAYERS {
+                if active >> p & 1 == 1 {
+                    excess[p] = m.excess(node.eqr_mix, node.position[p], self.class[p]);
+                    mean[p] = m.mean(node.eqr_mix, node.position[p]);
+                    total_excess += excess[p];
+                    total_mean += mean[p];
+                    k += 1.0;
+                }
+            }
+            for p in 0..MAX_PLAYERS {
+                if active >> p & 1 == 1 {
+                    let others = (total_excess - excess[p]) / (k - 1.0);
+                    // A share above 1 wins the pot plus later bets; the shares
+                    // still sum to 1 unless a clamp kicks in (normalized below).
+                    w[p] = (raw[p] + excess[p] - others + mean[p] - total_mean / k).clamp(-0.5, 1.5);
+                    sum += w[p];
+                }
+            }
+        } else {
+            let exponent = cfg.realization_exponent as f32;
+            for p in 0..MAX_PLAYERS {
+                if active >> p & 1 == 1 {
+                    w[p] = node.realization[p] * raw[p].powf(exponent);
+                    sum += w[p];
+                }
             }
         }
         if sum > 0.0 {
@@ -280,9 +299,11 @@ impl PreflopSolver {
     }
 
     /// Expected value (chips won minus chips put in) of each action at decision
-    /// node `idx` for a hand of `class`, when everyone follows the average
-    /// strategy afterwards. The other players' cards are weighted by how likely
-    /// their actions on the way to the node are. Monte Carlo over `samples` deals.
+    /// node `idx` for a hand of `class`, when the other players follow the
+    /// average strategy and the hand plays a best response afterwards (chosen
+    /// per decision, without seeing the other cards). The other players' cards
+    /// are weighted by how likely their actions on the way to the node are.
+    /// Monte Carlo over `samples` deals.
     pub fn action_values(&self, idx: usize, class: usize, samples: usize, seed: u64) -> Vec<f64> {
         let nodes = &self.tree.nodes;
         let PKind::Decision(seat) = nodes[idx].kind else { return Vec::new() };
@@ -296,39 +317,79 @@ impl PreflopSolver {
             at = parent;
         }
         let combos = crate::range::class_combos(class);
-        let na = nodes[idx].num_children as usize;
-        let (mut sum, mut total) = (vec![0.0f64; na], 0.0f64);
         let mut rng = Rng::new(seed);
+        let mut deals = Vec::with_capacity(samples);
         for _ in 0..samples {
             let (a, b) = crate::card::combo_cards(combos[rng.below(combos.len() as u32) as usize]);
-            let mut deal = Deal::with_hand(&self.cfg, &mut rng, Some((seat, a, b)));
+            let deal = Deal::with_hand(&self.cfg, &mut rng, Some((seat, a, b)));
             let mut w = 1.0f64;
             for &(node, i) in &path {
-                let pn = &nodes[node];
-                if let PKind::Decision(q) = pn.kind {
+                if let PKind::Decision(q) = nodes[node].kind {
                     if q as usize != seat {
-                        w *= self.average(pn, deal.class[q as usize])[i] as f64;
+                        w *= self.average(&nodes[node], deal.class[q as usize])[i] as f64;
                     }
                 }
             }
-            if w <= 0.0 {
-                continue;
+            if w > 0.0 {
+                deals.push((deal, w));
             }
-            for (i, c) in nodes[idx].children().enumerate() {
-                sum[i] += w * self.expected(c, seat, &mut deal) as f64;
-            }
-            total += w;
         }
-        sum.iter().map(|s| if total > 0.0 { s / total } else { f64::NAN }).collect()
+        let total: f64 = deals.iter().map(|d| d.1).sum();
+        // Best response by repeated improvement: each pass fixes one more level
+        // of the hand's later decisions (there are only a few levels preflop).
+        let mut choice: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        let mut cfv: std::collections::HashMap<usize, Vec<f64>> = std::collections::HashMap::new();
+        for _ in 0..6 {
+            cfv.clear();
+            for (deal, w) in deals.iter_mut() {
+                self.best_response_walk(idx, seat, deal, *w, &choice, &mut cfv);
+            }
+            let next: std::collections::HashMap<usize, usize> = cfv
+                .iter()
+                .map(|(&n, v)| (n, (0..v.len()).max_by(|&a, &b| v[a].partial_cmp(&v[b]).unwrap()).unwrap_or(0)))
+                .collect();
+            if next == choice {
+                break;
+            }
+            choice = next;
+        }
+        let root = cfv.get(&idx).cloned().unwrap_or_default();
+        root.iter().map(|s| if total > 0.0 { s / total } else { f64::NAN }).collect()
     }
 
-    fn expected(&self, idx: usize, p: usize, deal: &mut Deal) -> f32 {
+    fn best_response_walk(
+        &self,
+        idx: usize,
+        hero: usize,
+        deal: &mut Deal,
+        reach: f64,
+        choice: &std::collections::HashMap<usize, usize>,
+        cfv: &mut std::collections::HashMap<usize, Vec<f64>>,
+    ) -> f32 {
         let node = &self.tree.nodes[idx];
         let PKind::Decision(q) = node.kind else {
-            return self.payoff(node, p, deal);
+            return self.payoff(node, hero, deal);
         };
+        if q as usize == hero {
+            let vals: Vec<f32> = node.children().map(|c| self.best_response_walk(c, hero, deal, reach, choice, cfv)).collect();
+            let sums = cfv.entry(idx).or_insert_with(|| vec![0.0; vals.len()]);
+            for (s, &v) in sums.iter_mut().zip(&vals) {
+                *s += reach * v as f64;
+            }
+            let pick = choice.get(&idx).copied().unwrap_or_else(|| {
+                let avg = self.average(node, deal.class[hero]);
+                (0..avg.len()).max_by(|&a, &b| avg[a].partial_cmp(&avg[b]).unwrap()).unwrap_or(0)
+            });
+            return vals[pick];
+        }
         let s = self.average(node, deal.class[q as usize]);
-        node.children().zip(s).filter(|&(_, x)| x > 0.0).map(|(c, x)| x * self.expected(c, p, deal)).sum()
+        let mut ev = 0.0;
+        for (c, x) in node.children().zip(s) {
+            if x > 0.0 {
+                ev += x * self.best_response_walk(c, hero, deal, reach * x as f64, choice, cfv);
+            }
+        }
+        ev
     }
 
     /// Multiplies all regrets and cumulative strategies by `factor` (linear-CFR discounting).
