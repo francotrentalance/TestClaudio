@@ -3,14 +3,14 @@
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
-use crate::display::{self, ActionKind, bold, dim, paint, pct1};
+use crate::display::{self, bold, dim, paint, pct1, ActionKind};
 use crate::postflop::tree::fmt_chips;
 use crate::preflop::config::PreflopConfig;
 use crate::preflop::mccfr::PreflopSolver;
 use crate::preflop::tree::{PAction, PKind, PNode};
-use crate::range::{NUM_CLASSES, Range, class_name, class_num_combos};
+use crate::range::{class_name, class_num_combos, Range, NUM_CLASSES};
 
 #[derive(Clone)]
 pub struct PFrame {
@@ -224,7 +224,11 @@ pub fn render_action_grid(ex: &PExplorer, i: usize) -> Result<String, String> {
         None => dim("  .  "),
         Some(fr) => {
             let txt = format!("{:>4} ", (fr[i] * 100.0).round() as i64);
-            if fr[i] >= 0.5 { paint(&txt, kinds[i]) } else { txt }
+            if fr[i] >= 0.5 {
+                paint(&txt, kinds[i])
+            } else {
+                txt
+            }
         }
     }));
     Ok(s)
@@ -243,7 +247,11 @@ pub fn render_range(ex: &PExplorer, seat: usize) -> String {
             dim("  .  ")
         } else {
             let txt = format!("{:>4} ", (r[c] * 100.0).round() as i64);
-            if r[c] >= 0.5 { paint(&txt, ActionKind::Passive) } else { txt }
+            if r[c] >= 0.5 {
+                paint(&txt, ActionKind::Passive)
+            } else {
+                txt
+            }
         }
     }));
     s.push_str(&format!("{}\n", ex.range_of(seat).to_range_string()));

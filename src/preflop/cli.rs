@@ -6,7 +6,7 @@ use clap::Args;
 
 use crate::display::{bold, dim};
 use crate::preflop::config::PreflopConfig;
-use crate::preflop::explore::{self, PExplorer, render, rfi_summary, run_repl};
+use crate::preflop::explore::{self, render, rfi_summary, run_repl, PExplorer};
 use crate::preflop::mccfr::PreflopSolver;
 
 #[derive(Args)]

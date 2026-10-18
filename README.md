@@ -15,16 +15,42 @@ You go from one to the other: solve preflop, walk to a flop terminal (e.g. *BTN 
 
 ---
 
-## Build
+## Install on Linux Mint
 
-Requires a recent Rust toolchain (edition 2024, Rust ≥ 1.85).
+Tested on Linux Mint 22, Mint 21.3 and LMDE 6 (clean installs, as a normal user with sudo).
+
+```sh
+git clone https://github.com/francotrentalance/TestClaudio.git holdem-solver
+cd holdem-solver
+./install.sh
+```
+
+`install.sh`:
+
+1. Installs `build-essential` if there is no C compiler. The solver links a small C memory allocator.
+2. Picks a Rust compiler:
+   * **Mint 21 / 22:** Mint's own Rust packages are new enough (Rust 1.75), so it runs `sudo apt install cargo rustc`.
+   * **LMDE 6:** its Rust (1.63) is too old, so it installs current Rust with [rustup](https://rustup.rs) into `~/.cargo`. No sudo is needed for that step.
+3. Builds, installs the binary to `~/.local/bin/holdem-solver`, and adds that directory to PATH in `~/.bashrc`. Mint only adds `~/.local/bin` to PATH at login, so without this a new terminal wouldn't find the command until you log out and back in.
+
+Options:
+
+* `./install.sh --rustup` uses current Rust from rustup even on Mint 21/22. The binary is noticeably faster on big trees: about 15–25% per iteration on flop solves, compared with Mint's Rust 1.75.
+* `--prefix DIR` installs somewhere else.
+* `--no-install` only builds.
+
+To uninstall, delete `~/.local/bin/holdem-solver` and the line marked `added by holdem-solver install.sh` in `~/.bashrc`.
+
+## Build manually (any Linux)
+
+Requires Rust ≥ 1.75 and a C compiler (`gcc`/`cc`).
 
 ```sh
 cargo build --release
 ./target/release/holdem-solver --help
 ```
 
-`.cargo/config.toml` builds with `-C target-cpu=native` (AVX2/AVX-512 where available). Delete that file if you need a binary that runs on other machines.
+`.cargo/config.toml` builds with `-C target-cpu=native` (AVX2/AVX-512 where available), so the binary is tuned for the machine that builds it. Delete that file if you need a binary that runs on other machines.
 
 Run the tests (all in release mode; about 15 s):
 
@@ -237,6 +263,7 @@ Solving time scales roughly with tree memory. On the default flop, BB checks 96%
 ## Layout
 
 ```
+install.sh          build + install on Linux Mint / Ubuntu / Debian
 src/card.rs         cards, combos, masks, RNG
 src/eval.rs         5-7 card evaluator
 src/range.rs        range parsing, 169 classes

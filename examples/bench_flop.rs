@@ -1,5 +1,5 @@
 //! Benchmark: iterations of a small flop spot. `cargo run --release --example bench_flop [threads] [iters]`
-use holdem_solver::postflop::{PostflopConfig, PostflopGame, StreetSizes, tree_stats};
+use holdem_solver::postflop::{tree_stats, PostflopConfig, PostflopGame, StreetSizes};
 use std::time::Instant;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;

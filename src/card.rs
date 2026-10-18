@@ -64,7 +64,7 @@ pub fn parse_card(s: &str) -> Result<Card, String> {
 /// `"AsKd7h"`, `"As Kd 7h"` and `"As,Kd,7h"` are all accepted. Duplicates are rejected.
 pub fn parse_cards(s: &str) -> Result<Vec<Card>, String> {
     let chars: Vec<char> = s.chars().filter(|c| !c.is_whitespace() && *c != ',' && *c != '-').collect();
-    if !chars.len().is_multiple_of(2) {
+    if chars.len() % 2 != 0 {
         return Err(format!("invalid card list '{s}'"));
     }
     let mut cards = Vec::with_capacity(chars.len() / 2);

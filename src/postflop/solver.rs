@@ -11,7 +11,7 @@ use rayon::prelude::*;
 
 use crate::card::Card;
 use crate::postflop::game::PostflopGame;
-use crate::postflop::tree::{Action, NONE, Node, NodeKind};
+use crate::postflop::tree::{Action, Node, NodeKind, NONE};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Discount {
@@ -443,7 +443,7 @@ impl PostflopGame {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::card::{Rng, card_bit, cards_mask};
+    use crate::card::{card_bit, cards_mask, Rng};
     use crate::eval::eval_mask;
     use crate::postflop::PostflopConfig;
 

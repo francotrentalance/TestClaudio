@@ -48,11 +48,19 @@ pub fn paint(text: &str, kind: ActionKind) -> String {
 }
 
 pub fn dim(text: &str) -> String {
-    if color_enabled() { format!("\x1b[2m{text}\x1b[0m") } else { text.to_string() }
+    if color_enabled() {
+        format!("\x1b[2m{text}\x1b[0m")
+    } else {
+        text.to_string()
+    }
 }
 
 pub fn bold(text: &str) -> String {
-    if color_enabled() { format!("\x1b[1m{text}\x1b[0m") } else { text.to_string() }
+    if color_enabled() {
+        format!("\x1b[1m{text}\x1b[0m")
+    } else {
+        text.to_string()
+    }
 }
 
 /// Renders a 13x13 grid. `cell(class)` returns already-padded cell text.

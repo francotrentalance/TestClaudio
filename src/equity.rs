@@ -4,7 +4,7 @@
 //! pairwise comparisons, so a flop is enumerated exactly (1,081 runouts) in a
 //! fraction of a second. Preflop boards are sampled.
 
-use crate::card::{Card, NUM_COMBOS, Rng, card_bit, cards_mask, combo_cards, combo_mask};
+use crate::card::{card_bit, cards_mask, combo_cards, combo_mask, Card, Rng, NUM_COMBOS};
 use crate::eval::eval_mask;
 use crate::range::Range;
 

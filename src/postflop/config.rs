@@ -165,7 +165,11 @@ impl PostflopConfig {
 
     pub fn rake_amount(&self, pot: f64) -> f64 {
         let r = pot * self.rake;
-        if self.rake_cap > 0.0 { r.min(self.rake_cap) } else { r }
+        if self.rake_cap > 0.0 {
+            r.min(self.rake_cap)
+        } else {
+            r
+        }
     }
 }
 

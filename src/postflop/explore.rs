@@ -7,12 +7,12 @@
 
 use std::io::{BufRead, Write};
 
-use crate::card::{Card, card_to_string, combo_index, parse_card, permute_card, rank, suit};
-use crate::display::{self, ActionKind, bold, dim, paint, pct1};
+use crate::card::{card_to_string, combo_index, parse_card, permute_card, rank, suit, Card};
+use crate::display::{self, bold, dim, paint, pct1, ActionKind};
 use crate::postflop::game::PostflopGame;
 use crate::postflop::solver::{Dealt, Mode};
-use crate::postflop::tree::{Action, NONE, Node, NodeKind, fmt_chips, pair_suits};
-use crate::range::{NUM_CLASSES, class_name, combo_class};
+use crate::postflop::tree::{fmt_chips, pair_suits, Action, Node, NodeKind, NONE};
+use crate::range::{class_name, combo_class, NUM_CLASSES};
 
 pub const PLAYER_NAMES: [&str; 2] = ["OOP", "IP"];
 
@@ -533,7 +533,11 @@ pub fn render_action_grid(ex: &Explorer, i: usize) -> Result<String, String> {
         Some(fr) => {
             let v = (fr[i] * 100.0).round() as i64;
             let txt = format!("{:>4} ", v);
-            if fr[i] >= 0.5 { paint(&txt, kinds[i]) } else { txt }
+            if fr[i] >= 0.5 {
+                paint(&txt, kinds[i])
+            } else {
+                txt
+            }
         }
     }));
     Ok(s)

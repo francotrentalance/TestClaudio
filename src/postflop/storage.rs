@@ -69,7 +69,11 @@ pub(crate) enum Storage {
 }
 
 pub(crate) fn bytes_per_entry(compressed: bool) -> u64 {
-    if compressed { 4 } else { 8 }
+    if compressed {
+        4
+    } else {
+        8
+    }
 }
 
 fn encode_i16(src: &[f32], dst: &mut [i16]) -> f32 {

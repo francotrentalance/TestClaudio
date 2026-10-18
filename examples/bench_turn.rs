@@ -1,4 +1,4 @@
-use holdem_solver::postflop::{PostflopConfig, PostflopGame, tree_stats};
+use holdem_solver::postflop::{tree_stats, PostflopConfig, PostflopGame};
 use std::time::Instant;
 fn main() {
     let threads: usize = std::env::args().nth(1).map(|s| s.parse().unwrap()).unwrap_or(4);

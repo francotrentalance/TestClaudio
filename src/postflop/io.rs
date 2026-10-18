@@ -6,7 +6,7 @@
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::card::card_to_string;
 use crate::postflop::config::PostflopConfig;
@@ -128,5 +128,9 @@ fn walk(ex: &mut Explorer, out: &mut Vec<Value>) {
 }
 
 fn round4(x: f64) -> f64 {
-    if x.is_finite() { (x * 1e4).round() / 1e4 } else { f64::NAN }
+    if x.is_finite() {
+        (x * 1e4).round() / 1e4
+    } else {
+        f64::NAN
+    }
 }

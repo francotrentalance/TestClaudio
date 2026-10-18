@@ -11,10 +11,10 @@ use holdem_solver::card::{cards_to_string, parse_cards};
 use holdem_solver::display::{self, bold, dim};
 use holdem_solver::equity::range_vs_range;
 use holdem_solver::eval::{describe, eval_cards};
-use holdem_solver::postflop::explore::{Explorer, render_node, run_repl};
-use holdem_solver::postflop::{PostflopConfig, PostflopGame, io as pio, tree_stats};
+use holdem_solver::postflop::explore::{render_node, run_repl, Explorer};
+use holdem_solver::postflop::{io as pio, tree_stats, PostflopConfig, PostflopGame};
 use holdem_solver::preflop;
-use holdem_solver::range::{Range, class_name};
+use holdem_solver::range::{class_name, Range};
 
 #[derive(Parser)]
 #[command(name = "holdem-solver", version, about = "GTO solver for 6-max No-Limit Hold'em")]
@@ -250,12 +250,10 @@ fn postflop(a: PostflopArgs) -> Result<(), String> {
     if a.dry_run {
         return Ok(());
     }
-    if let Some(avail) = available_memory()
-        && stats.solve_bytes() > avail * 9 / 10
-        && !a.force
-    {
+    let avail = available_memory().unwrap_or(u64::MAX);
+    if stats.solve_bytes() > avail / 10 * 9 && !a.force {
         return Err(format!(
-            "this tree needs {} but only {} is available; use fewer bet sizes, \
+            "this tree needs {} but only {} is available; use --compress, fewer bet sizes, \
              a lower --max-raises, narrower ranges, or --force",
             gb(stats.solve_bytes()),
             gb(avail)

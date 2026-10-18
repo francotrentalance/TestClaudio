@@ -6,7 +6,7 @@
 //! of the regret/strategy storage. With isomorphism enabled, suit-symmetric
 //! cards are not expanded; [`IsoEntry`]s map them to a representative card.
 
-use crate::card::{Card, card_to_string, make_card, rank, suit};
+use crate::card::{card_to_string, make_card, rank, suit, Card};
 use crate::postflop::config::{BetSize, ParsedStreet, PostflopConfig};
 
 pub const NONE: u32 = u32::MAX;

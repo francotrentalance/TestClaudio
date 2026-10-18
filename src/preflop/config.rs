@@ -123,7 +123,11 @@ impl PreflopConfig {
     }
 
     pub fn sb_seat(&self) -> usize {
-        if self.players == 2 { 0 } else { self.players - 2 }
+        if self.players == 2 {
+            0
+        } else {
+            self.players - 2
+        }
     }
 
     pub fn bb_seat(&self) -> usize {
@@ -136,11 +140,19 @@ impl PreflopConfig {
         if n == 2 {
             return 1 - seat;
         }
-        if seat >= n - 2 { seat - (n - 2) } else { seat + 2 }
+        if seat >= n - 2 {
+            seat - (n - 2)
+        } else {
+            seat + 2
+        }
     }
 
     pub fn rake_amount(&self, pot: f64) -> f64 {
         let r = pot * self.rake;
-        if self.rake_cap > 0.0 { r.min(self.rake_cap) } else { r }
+        if self.rake_cap > 0.0 {
+            r.min(self.rake_cap)
+        } else {
+            r
+        }
     }
 }

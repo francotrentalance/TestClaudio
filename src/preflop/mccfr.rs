@@ -14,11 +14,11 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering::Relaxed};
 
 use rayon::prelude::*;
 
-use crate::card::{Card, Rng, card_bit, combo_index};
+use crate::card::{card_bit, combo_index, Card, Rng};
 use crate::eval::eval_mask;
-use crate::preflop::config::{MAX_PLAYERS, PreflopConfig};
+use crate::preflop::config::{PreflopConfig, MAX_PLAYERS};
 use crate::preflop::tree::{PKind, PNode, PreflopTree};
-use crate::range::{NUM_CLASSES, combo_class};
+use crate::range::{combo_class, NUM_CLASSES};
 
 const MAX_ACTIONS: usize = 8;
 
@@ -268,7 +268,11 @@ impl PreflopSolver {
         let base = node.storage as usize + class * na;
         let raw: Vec<f32> = self.strategy[base..base + na].iter().map(load).collect();
         let sum: f32 = raw.iter().sum();
-        if sum > 0.0 { raw.iter().map(|x| x / sum).collect() } else { vec![1.0 / na as f32; na] }
+        if sum > 0.0 {
+            raw.iter().map(|x| x / sum).collect()
+        } else {
+            vec![1.0 / na as f32; na]
+        }
     }
 
     /// Normalized average strategies of all decision nodes (for saving).

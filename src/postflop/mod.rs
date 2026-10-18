@@ -14,7 +14,7 @@ pub mod storage;
 pub mod tree;
 
 pub use config::{BetSize, PostflopConfig, StreetSizes};
-pub use game::{PostflopGame, TreeStats, tree_stats};
+pub use game::{tree_stats, PostflopGame, TreeStats};
 pub use tree::{Action, Node, NodeKind};
 
 /// Illustrative 100bb BTN opening range (~44% of hands).

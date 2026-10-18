@@ -2,11 +2,11 @@
 
 use rayon::prelude::*;
 
-use crate::card::{Card, NUM_COMBOS, cards_mask, combo_cards, combo_index, combo_mask, parse_cards};
+use crate::card::{cards_mask, combo_cards, combo_index, combo_mask, parse_cards, Card, NUM_COMBOS};
 use crate::eval::eval_mask;
 use crate::postflop::config::PostflopConfig;
-use crate::postflop::storage::{Block, Storage, bytes_per_entry};
-use crate::postflop::tree::{IsoEntry, NONE, Node, TreeBuilder, board_invariant, pair_suits, swap_card};
+use crate::postflop::storage::{bytes_per_entry, Block, Storage};
+use crate::postflop::tree::{board_invariant, pair_suits, swap_card, IsoEntry, Node, TreeBuilder, NONE};
 use crate::range::Range;
 
 /// One hand in a [`RiverEval`] list; the cards are inlined for the showdown sweep.

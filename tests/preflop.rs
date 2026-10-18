@@ -2,10 +2,10 @@
 //! Validates the multiplayer MCCFR against an independent exact solver on the
 //! heads-up push/fold game, where the answer is a well-defined Nash equilibrium.
 
-use holdem_solver::card::{Rng, card_bit, combo_mask};
+use holdem_solver::card::{card_bit, combo_mask, Rng};
 use holdem_solver::eval::eval_mask;
 use holdem_solver::preflop::{PKind, PreflopConfig, PreflopSolver};
-use holdem_solver::range::{NUM_CLASSES, class_num_combos, combo_class};
+use holdem_solver::range::{class_num_combos, combo_class, NUM_CLASSES};
 
 /// Class-vs-class equity and the number of non-conflicting combo pairs.
 fn class_matrix(boards_per_pair: usize) -> (Vec<f64>, Vec<f64>) {
@@ -59,7 +59,11 @@ fn exact_pushfold(stack: f64, eq: &[f64], w: &[f64]) -> (Vec<f64>, Vec<f64>) {
     let (mut ss, mut sb) = (vec![[0.0f64; 2]; n], vec![[0.0f64; 2]; n]);
     let strat = |r: &[f64; 2]| {
         let (a, b) = (r[0].max(0.0), r[1].max(0.0));
-        if a + b > 0.0 { [a / (a + b), b / (a + b)] } else { [0.5, 0.5] }
+        if a + b > 0.0 {
+            [a / (a + b), b / (a + b)]
+        } else {
+            [0.5, 0.5]
+        }
     };
     for t in 1..=4000 {
         let x: Vec<[f64; 2]> = rs.iter().map(strat).collect();

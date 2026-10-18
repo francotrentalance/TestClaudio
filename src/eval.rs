@@ -4,7 +4,7 @@
 //! category in bits 20..24 and up to five kicker ranks as 4-bit nibbles below it,
 //! so comparing two values compares the hands.
 
-use crate::card::{Card, card_bit};
+use crate::card::{card_bit, Card};
 
 pub const HIGH_CARD: u32 = 0;
 pub const ONE_PAIR: u32 = 1;

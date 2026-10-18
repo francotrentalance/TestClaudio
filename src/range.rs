@@ -10,8 +10,7 @@
 //! Later tokens override earlier ones, so `22+, 22:0.5` gives deuces half weight.
 
 use crate::card::{
-    Card, NUM_COMBOS, RANK_CHARS, card_bit, combo_cards, combo_index, make_card, parse_cards, parse_rank,
-    rank, suit,
+    card_bit, combo_index, make_card, parse_cards, parse_rank, rank, suit, Card, NUM_COMBOS, RANK_CHARS,
 };
 
 pub const NUM_CLASSES: usize = 169;
@@ -19,7 +18,7 @@ pub const NUM_CLASSES: usize = 169;
 /// Grid index of a starting-hand class. The grid is the standard 13x13 layout
 /// with `AA` top-left, suited hands above the diagonal and offsuit below.
 #[inline]
-pub fn class_index(r1: u8, r2: u8, suited: bool) -> usize {
+pub const fn class_index(r1: u8, r2: u8, suited: bool) -> usize {
     let (hi, lo) = if r1 >= r2 { (r1, r2) } else { (r2, r1) };
     let (row, col) = if suited { (12 - hi, 12 - lo) } else { (12 - lo, 12 - hi) };
     row as usize * 13 + col as usize
@@ -28,7 +27,11 @@ pub fn class_index(r1: u8, r2: u8, suited: bool) -> usize {
 /// `(high rank, low rank, suited)` of a class index.
 pub fn class_ranks(idx: usize) -> (u8, u8, bool) {
     let (row, col) = ((idx / 13) as u8, (idx % 13) as u8);
-    if row < col { (12 - row, 12 - col, true) } else { (12 - col, 12 - row, false) }
+    if row < col {
+        (12 - row, 12 - col, true)
+    } else {
+        (12 - col, 12 - row, false)
+    }
 }
 
 pub fn class_name(idx: usize) -> String {
@@ -50,16 +53,22 @@ pub fn class_num_combos(idx: usize) -> usize {
     }
 }
 
-fn build_combo_class_table() -> Vec<u8> {
-    (0..NUM_COMBOS)
-        .map(|i| {
-            let (a, b) = combo_cards(i);
-            class_index(rank(a), rank(b), suit(a) == suit(b) && rank(a) != rank(b)) as u8
-        })
-        .collect()
+const fn build_combo_class_table() -> [u8; NUM_COMBOS] {
+    let mut table = [0u8; NUM_COMBOS];
+    let mut a = 1u8;
+    while a < 52 {
+        let mut b = 0u8;
+        while b < a {
+            let suited = suit(a) == suit(b) && rank(a) != rank(b);
+            table[combo_index(a, b)] = class_index(rank(a), rank(b), suited) as u8;
+            b += 1;
+        }
+        a += 1;
+    }
+    table
 }
 
-static COMBO_CLASS: std::sync::LazyLock<Vec<u8>> = std::sync::LazyLock::new(build_combo_class_table);
+static COMBO_CLASS: [u8; NUM_COMBOS] = build_combo_class_table();
 
 /// The starting-hand class of a combo.
 #[inline]

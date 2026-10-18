@@ -1,7 +1,9 @@
 [package]
 name = "holdem-solver"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+# Builds with the Rust shipped by Linux Mint 21/22 (Ubuntu apt: rustc 1.75).
+rust-version = "1.75"
 description = "GTO solver for 6-max No-Limit Hold'em: exact heads-up postflop DCFR and multiplayer preflop MCCFR"
 license = "MIT"
 

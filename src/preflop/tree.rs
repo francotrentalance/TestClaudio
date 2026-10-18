@@ -3,7 +3,7 @@
 //! Seats are numbered in preflop action order (seat 0 is UTG at 6-max, the SB
 //! heads-up). Terminals are folds, all-in showdowns and pots that see a flop.
 
-use crate::preflop::config::{MAX_PLAYERS, PreflopConfig};
+use crate::preflop::config::{PreflopConfig, MAX_PLAYERS};
 use crate::range::NUM_CLASSES;
 
 const EPS: f64 = 1e-9;
