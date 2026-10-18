@@ -187,3 +187,16 @@ fn flop_terminals_get_eqr_mix_and_positions() {
     assert_eq!(flop.kind, PKind::Flop);
     assert!((flop.eqr_mix[1] - 1.0).abs() < 1e-4, "{:?}", flop.eqr_mix);
 }
+
+/// Folding the small blind loses exactly the blind; shoving aces is clearly profitable.
+#[test]
+fn action_values_of_heads_up_pushfold() {
+    let cfg = PreflopConfig { players: 2, stack: 10.0, pushfold: true, iterations: 200_000, ..PreflopConfig::default() };
+    let solver = PreflopSolver::new(cfg).unwrap();
+    solver.run(200_000, 3);
+    let aa = (0..NUM_CLASSES).find(|&c| holdem_solver::range::class_name(c) == "AA").unwrap();
+    let v = solver.action_values(0, aa, 4000, 1);
+    assert_eq!(v.len(), 2);
+    assert!((v[0] + 0.5).abs() < 1e-6, "fold = -SB, got {}", v[0]);
+    assert!(v[1] > 1.0, "AA shove EV {}", v[1]);
+}

@@ -336,9 +336,13 @@ pub fn sample_flops(n: usize, seed: u64) -> Vec<String> {
 /// Solves `kind` on `board` with `ranges` (to a looser target than the
 /// training library) and adds every hand's EV and equity at the flop to `sums`.
 pub fn measure_eqr(kind: &str, board: &str, ranges: &SpotRanges, sums: &mut EqrSums, mut log: impl FnMut(&str)) -> Result<f64, String> {
-    let config = PostflopConfig { iterations: 250, target_exploitability: 1.5, ..spot_config(kind, board)? };
-    let [oop, ip] = ranges.of(kind)?.clone();
-    let mut game = PostflopGame::with_ranges(config.clone(), [oop, ip])?;
+    let config = PostflopConfig { iterations: 200, target_exploitability: 2.0, ..spot_config(kind, board)? };
+    // Every hand outside the range gets a tiny "probe" weight: too small to move
+    // the equilibrium, but the solver then also works out how each of those
+    // hands would play and realize there, so no class has to be guessed.
+    let probe = |r: &Range| Range { weights: r.weights.iter().map(|&w| w.max(EQR_PROBE)).collect() };
+    let [oop, ip] = ranges.of(kind)?;
+    let mut game = PostflopGame::with_ranges(config.clone(), [probe(oop), probe(ip)])?;
     let expl = solve_postflop(&mut game, &config, &mut log);
     let ex = Explorer::new(&game);
     let pot = config.pot;
@@ -359,9 +363,11 @@ pub fn measure_eqr(kind: &str, board: &str, ranges: &SpotRanges, sums: &mut EqrS
     Ok(expl)
 }
 
+/// Range weight of hands outside a range while measuring realization.
+const EQR_PROBE: f32 = 0.02;
 /// Classes with less total weight than this (in combo-flops) are not measured.
-const EQR_MIN_WEIGHT: f64 = 2.0;
-const EQR_CLAMP: (f32, f32) = (0.3, 1.6);
+const EQR_MIN_WEIGHT: f64 = 0.5;
+const EQR_CLAMP: (f32, f32) = (0.2, 2.0);
 
 /// Measured realization per class, `None` where the class was (almost) never in range.
 pub fn eqr_measured(sums: &EqrSums, p: usize) -> Vec<Option<f32>> {
@@ -410,23 +416,23 @@ fn fill_nearest(measured: &[Option<f32>]) -> Vec<f32> {
 }
 
 /// Builds the preflop model from realization measured in single-raised
-/// (`deep`) and 3-bet (`shallow`) pots. Shallow-pot classes that were not
-/// measured take their deep value shrunk toward 1 by the factor that best
-/// fits the classes measured in both.
+/// (`deep`) and 3-bet (`shallow`) pots. With probe weights every class is
+/// normally measured; any that is not falls back to a least-squares line
+/// through the classes measured in both (shallow) or its nearest measured
+/// neighbour (deep).
 pub fn eqr_model(deep: &EqrSums, shallow: &EqrSums, deep_spr: f64, shallow_spr: f64) -> EqrModel {
     let mut tables = Vec::new();
     for p in 0..2 {
         let d = fill_nearest(&eqr_measured(deep, p));
         let s = eqr_measured(shallow, p);
-        let (mut num, mut den) = (0.0f64, 0.0f64);
-        for c in 0..NUM_CLASSES {
-            if let Some(x) = s[c] {
-                num += ((x - 1.0) * (d[c] - 1.0)) as f64;
-                den += ((d[c] - 1.0) * (d[c] - 1.0)) as f64;
-            }
-        }
-        let shrink = if den > 0.0 { (num / den).clamp(0.0, 1.0) as f32 } else { 0.5 };
-        let s: Vec<f32> = (0..NUM_CLASSES).map(|c| s[c].unwrap_or(1.0 + shrink * (d[c] - 1.0))).collect();
+        let pairs: Vec<(f64, f64)> = (0..NUM_CLASSES).filter_map(|c| s[c].map(|x| (d[c] as f64, x as f64))).collect();
+        let n = pairs.len() as f64;
+        let (mx, my) = (pairs.iter().map(|q| q.0).sum::<f64>() / n.max(1.0), pairs.iter().map(|q| q.1).sum::<f64>() / n.max(1.0));
+        let sxx: f64 = pairs.iter().map(|q| (q.0 - mx) * (q.0 - mx)).sum();
+        let sxy: f64 = pairs.iter().map(|q| (q.0 - mx) * (q.1 - my)).sum();
+        let slope = if sxx > 0.0 { (sxy / sxx).clamp(0.0, 1.5) } else { 0.0 };
+        let fit = |x: f32| ((my + slope * (x as f64 - mx)) as f32).clamp(EQR_CLAMP.0, EQR_CLAMP.1);
+        let s: Vec<f32> = (0..NUM_CLASSES).map(|c| s[c].unwrap_or_else(|| if pairs.is_empty() { 1.0 } else { fit(d[c]) })).collect();
         tables.push((d, s));
     }
     let (ip, oop) = (tables.pop().unwrap(), tables.pop().unwrap());

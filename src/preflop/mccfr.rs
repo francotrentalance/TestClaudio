@@ -52,12 +52,24 @@ struct Deal {
 
 impl Deal {
     fn new(cfg: &PreflopConfig, rng: &mut Rng) -> Self {
+        Self::with_hand(cfg, rng, None)
+    }
+
+    /// A random deal; with `fixed = (seat, a, b)` that seat holds `a b`.
+    fn with_hand(cfg: &PreflopConfig, rng: &mut Rng, fixed: Option<(usize, Card, Card)>) -> Self {
         let n = cfg.players;
         let mut deck: [Card; 52] = std::array::from_fn(|i| i as Card);
         // Partial Fisher-Yates for the hole cards.
         for i in 0..2 * n {
             let j = i + rng.below((52 - i) as u32) as usize;
             deck.swap(i, j);
+        }
+        // Swapping the fixed cards into place keeps everything else uniform.
+        if let Some((seat, a, b)) = fixed {
+            for (slot, c) in [(2 * seat, a), (2 * seat + 1, b)] {
+                let at = deck.iter().position(|&x| x == c).unwrap();
+                deck.swap(slot, at);
+            }
         }
         let mut class = [0usize; MAX_PLAYERS];
         let mut hand_mask = [0u64; MAX_PLAYERS];
@@ -265,6 +277,58 @@ impl PreflopSolver {
             }
             self.traverse(first + pick, p, deal, rng)
         }
+    }
+
+    /// Expected value (chips won minus chips put in) of each action at decision
+    /// node `idx` for a hand of `class`, when everyone follows the average
+    /// strategy afterwards. The other players' cards are weighted by how likely
+    /// their actions on the way to the node are. Monte Carlo over `samples` deals.
+    pub fn action_values(&self, idx: usize, class: usize, samples: usize, seed: u64) -> Vec<f64> {
+        let nodes = &self.tree.nodes;
+        let PKind::Decision(seat) = nodes[idx].kind else { return Vec::new() };
+        let seat = seat as usize;
+        // (decision node, index of the action taken) from the root to `idx`.
+        let mut path = Vec::new();
+        let mut at = idx;
+        while at != 0 {
+            let parent = nodes[at].parent as usize;
+            path.push((parent, at - nodes[parent].first_child as usize));
+            at = parent;
+        }
+        let combos = crate::range::class_combos(class);
+        let na = nodes[idx].num_children as usize;
+        let (mut sum, mut total) = (vec![0.0f64; na], 0.0f64);
+        let mut rng = Rng::new(seed);
+        for _ in 0..samples {
+            let (a, b) = crate::card::combo_cards(combos[rng.below(combos.len() as u32) as usize]);
+            let mut deal = Deal::with_hand(&self.cfg, &mut rng, Some((seat, a, b)));
+            let mut w = 1.0f64;
+            for &(node, i) in &path {
+                let pn = &nodes[node];
+                if let PKind::Decision(q) = pn.kind {
+                    if q as usize != seat {
+                        w *= self.average(pn, deal.class[q as usize])[i] as f64;
+                    }
+                }
+            }
+            if w <= 0.0 {
+                continue;
+            }
+            for (i, c) in nodes[idx].children().enumerate() {
+                sum[i] += w * self.expected(c, seat, &mut deal) as f64;
+            }
+            total += w;
+        }
+        sum.iter().map(|s| if total > 0.0 { s / total } else { f64::NAN }).collect()
+    }
+
+    fn expected(&self, idx: usize, p: usize, deal: &mut Deal) -> f32 {
+        let node = &self.tree.nodes[idx];
+        let PKind::Decision(q) = node.kind else {
+            return self.payoff(node, p, deal);
+        };
+        let s = self.average(node, deal.class[q as usize]);
+        node.children().zip(s).filter(|&(_, x)| x > 0.0).map(|(c, x)| x * self.expected(c, p, deal)).sum()
     }
 
     /// Multiplies all regrets and cumulative strategies by `factor` (linear-CFR discounting).

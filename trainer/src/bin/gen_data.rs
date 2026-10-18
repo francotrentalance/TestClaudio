@@ -48,7 +48,19 @@ fn report(pack: &LoadedPreflop) {
     use holdem_solver::preflop::PAction;
     use holdem_solver::range::Range;
     let tree = &pack.tree;
-    let names = pack.pack.config.position_names();
+    let cfg = &pack.pack.config;
+    eprintln!(
+        "config: {} iterations, eqr {}, realization_exponent {}, realization_oop {}",
+        pack.pack.iterations,
+        if cfg.eqr.is_some() { "on" } else { "off" },
+        cfg.realization_exponent,
+        cfg.realization_oop
+    );
+    if let Some(m) = &cfg.eqr {
+        let flop = tree.nodes.iter().find(|n| n.kind == holdem_solver::preflop::PKind::Flop && n.active == 0b101000).unwrap();
+        eprintln!("BTN vs BB flop: pot {} mix {:?} position {:?}; 76s IP {} A2o IP {}", flop.pot, flop.eqr_mix, flop.position, m.deep_ip[holdem_solver::range::class_index(5, 4, true)], m.deep_ip[holdem_solver::range::class_index(12, 0, false)]);
+    }
+    let names = cfg.position_names();
     let child = |node: usize, f: &dyn Fn(PAction) -> bool| tree.nodes[node].children().find(|&c| f(tree.nodes[c].action));
     let fold = |a: PAction| a == PAction::Fold;
     let show = |label: String, node: usize| {
@@ -101,22 +113,62 @@ fn main() {
             let model = gen::eqr_model(&sums[0], &sums[1], gen::spot_spr(SRP).unwrap(), gen::spot_spr(THREE_BET).unwrap());
             model.validate().expect("model");
             std::fs::write(&args[2], serde_json::to_string_pretty(&model).unwrap()).expect("write");
-            let measured = [gen::eqr_measured(&sums[0], 0), gen::eqr_measured(&sums[0], 1)];
+            let measured = [
+                gen::eqr_measured(&sums[0], 0),
+                gen::eqr_measured(&sums[0], 1),
+                gen::eqr_measured(&sums[1], 0),
+                gen::eqr_measured(&sums[1], 1),
+            ];
             eprintln!("class   deep OOP  deep IP  shallow OOP  shallow IP   (* = filled in, not measured)");
             for c in 0..NUM_CLASSES {
-                let mark = |m: &Option<f32>| if m.is_some() { ' ' } else { '*' };
+                let mark = |k: usize| if measured[k][c].is_some() { ' ' } else { '*' };
                 eprintln!(
-                    "{:5} {:8.3}{} {:8.3}{} {:10.3} {:11.3}",
+                    "{:5} {:8.3}{} {:8.3}{} {:10.3}{} {:10.3}{}",
                     class_name(c),
                     model.deep_oop[c],
-                    mark(&measured[0][c]),
+                    mark(0),
                     model.deep_ip[c],
-                    mark(&measured[1][c]),
+                    mark(1),
                     model.shallow_oop[c],
-                    model.shallow_ip[c]
+                    mark(2),
+                    model.shallow_ip[c],
+                    mark(3)
                 );
             }
             eprintln!("eqr: wrote {} ({:.0}s)", args[2], start.elapsed().as_secs_f64());
+        }
+        Some("values") => {
+            // gen-data values <cash.bin> <path> <class...>: EV of each action, e.g. path "F F F" = BTN to act.
+            let bytes = std::fs::read(&args[1]).expect("read");
+            let pack: PreflopPack = decode(&bytes).expect("cash pack");
+            let strategy = holdem_trainer::model::dequantize(&pack.strategy);
+            let solver = holdem_solver::preflop::PreflopSolver::with_strategy(pack.config.clone(), strategy, pack.iterations).expect("solver");
+            let tree = &solver.tree;
+            let mut node = 0;
+            for tok in args[2].split_whitespace() {
+                node = tree.nodes[node]
+                    .children()
+                    .find(|&c| {
+                        let a = tree.nodes[c].action;
+                        match tok {
+                            "F" => a == holdem_solver::preflop::PAction::Fold,
+                            "C" => matches!(a, holdem_solver::preflop::PAction::Call | holdem_solver::preflop::PAction::Check),
+                            "R" => matches!(a, holdem_solver::preflop::PAction::Raise(_)),
+                            "A" => matches!(a, holdem_solver::preflop::PAction::AllIn(_)),
+                            _ => false,
+                        }
+                    })
+                    .expect("path");
+            }
+            let acts: Vec<String> = tree.nodes[node].children().map(|c| format!("{:?}", tree.nodes[c].action)).collect();
+            eprintln!("node {node}: {}", acts.join(" / "));
+            for name in &args[3..] {
+                let class = (0..NUM_CLASSES).find(|&c| class_name(c) == *name).expect("class");
+                let v = solver.action_values(node, class, 20_000, 7);
+                let freq = solver.average(&tree.nodes[node], class);
+                let cells: Vec<String> = v.iter().zip(&freq).map(|(e, f)| format!("{e:+.3} ({:.0}%)", 100.0 * f)).collect();
+                eprintln!("{name:5} {}", cells.join("   "));
+            }
         }
         Some("ranges") => {
             print_ranges(&spot_ranges(&args[1]));
