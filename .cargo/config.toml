@@ -1,0 +1,4 @@
+# Solving is SIMD-heavy; build for the machine you run on.
+# Remove this if you need a binary that runs on other CPUs.
+[build]
+rustflags = ["-C", "target-cpu=native"]
