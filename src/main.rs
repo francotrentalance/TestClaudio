@@ -1,5 +1,10 @@
 use std::time::Instant;
 
+// The solver allocates many short-lived per-node vectors; mimalloc handles that
+// pattern noticeably faster than the system allocator.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use clap::{Args, Parser, Subcommand};
 
 use holdem_solver::card::{cards_to_string, parse_cards};
@@ -29,15 +34,11 @@ enum Command {
     /// Solve a heads-up postflop spot (exact, no card abstraction).
     Postflop(PostflopArgs),
     /// Explore a saved postflop solution.
-    View {
-        file: String,
-    },
+    View { file: String },
     /// Solve 6-max (2-6 players) preflop with MCCFR.
     Preflop(preflop::cli::PreflopArgs),
     /// Explore a saved preflop solution.
-    PreflopView {
-        file: String,
-    },
+    PreflopView { file: String },
     /// Range vs range equity.
     Equity {
         range1: String,
@@ -118,6 +119,9 @@ struct PostflopArgs {
     /// Disable suit isomorphism.
     #[arg(long)]
     no_iso: bool,
+    /// Store regrets and strategies in 16 bits: half the memory.
+    #[arg(long)]
+    compress: bool,
     /// Save the solution to a file (open it later with `view`).
     #[arg(long)]
     save: Option<String>,
@@ -203,6 +207,7 @@ fn build_config(a: &PostflopArgs) -> Result<PostflopConfig, String> {
     if a.no_iso {
         cfg.isomorphism = false;
     }
+    cfg.compress |= a.compress;
     Ok(cfg)
 }
 
@@ -285,17 +290,24 @@ fn postflop(a: PostflopArgs) -> Result<(), String> {
         expl,
         start.elapsed().as_secs_f64()
     );
-    println!("{} OOP {:.3}  IP {:.3}  (chips won from the {} pot)\n", bold("EV:"), ev[0], ev[1], game.config.pot);
+    println!(
+        "{} OOP {:.3}  IP {:.3}  (chips won from the {} pot)\n",
+        bold("EV:"),
+        ev[0],
+        ev[1],
+        game.config.pot
+    );
     game.finalize();
     println!("{}", render_node(&Explorer::new(&game)));
 
     if let Some(path) = &a.json {
         let v = pio::export_json(&game, Some(expl));
-        std::fs::write(path, serde_json::to_string_pretty(&v).unwrap()).map_err(|e| format!("{path}: {e}"))?;
+        std::fs::write(path, serde_json::to_string_pretty(&v).unwrap())
+            .map_err(|e| format!("{path}: {e}"))?;
         println!("wrote {path}");
     }
     if let Some(path) = &a.save {
-        pio::save(&mut game, path)?;
+        pio::save(&game, path)?;
         println!("saved {path} (open with: holdem-solver view {path})");
     }
     if a.explore {
@@ -351,7 +363,11 @@ fn show_range(range: &str, board: &str) -> Result<(), String> {
         if board.is_empty() {
             String::new()
         } else {
-            format!(", {:.1} after card removal on {}", r.num_combos_excluding(&board), cards_to_string(&board))
+            format!(
+                ", {:.1} after card removal on {}",
+                r.num_combos_excluding(&board),
+                cards_to_string(&board)
+            )
         }
     );
     print!(
@@ -359,11 +375,19 @@ fn show_range(range: &str, board: &str) -> Result<(), String> {
         display::grid(|c| {
             let w = weights[c];
             if w <= 0.0 {
-                dim(&format!("{:<5}", class_name(c)))
+                if display::color_enabled() {
+                    dim(&format!("{:<5}", class_name(c)))
+                } else {
+                    "  .  ".to_string()
+                }
             } else if w >= 0.999 {
                 display::paint(&format!("{:<5}", class_name(c)), display::ActionKind::Passive)
             } else {
-                format!("{:<3}{:>2}", &class_name(c)[..class_name(c).len().min(3)], (w * 100.0).round().min(99.0) as i64)
+                format!(
+                    "{:<3}{:>2}",
+                    &class_name(c)[..class_name(c).len().min(3)],
+                    (w * 100.0).round().min(99.0) as i64
+                )
             }
         })
     );

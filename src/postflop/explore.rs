@@ -90,7 +90,13 @@ pub fn action_kinds(actions: &[Action]) -> Vec<ActionKind> {
 
 fn swap_suit(s: u8, pair: usize) -> u8 {
     let (a, b) = pair_suits(pair);
-    if s == a { b } else if s == b { a } else { s }
+    if s == a {
+        b
+    } else if s == b {
+        a
+    } else {
+        s
+    }
 }
 
 impl<'a> Explorer<'a> {
@@ -180,9 +186,7 @@ impl<'a> Explorer<'a> {
         }
         let node = self.node().clone();
         let mapped = permute_card(actual, &f.perm);
-        let direct = node
-            .children()
-            .find(|&c| self.game.nodes[c].action == Action::Deal(mapped));
+        let direct = node.children().find(|&c| self.game.nodes[c].action == Action::Deal(mapped));
         let (child, pair) = match direct {
             Some(c) => (c, None),
             None => {
@@ -564,12 +568,16 @@ pub fn render_hands(ex: &Explorer, filter: Option<&str>) -> String {
             continue;
         }
         let (a, b) = ex.actual_combo(p, h);
-        let (a, b) = if rank(a) > rank(b) || (rank(a) == rank(b) && suit(a) > suit(b)) { (a, b) } else { (b, a) };
+        let (a, b) =
+            if rank(a) > rank(b) || (rank(a) == rank(b) && suit(a) > suit(b)) { (a, b) } else { (b, a) };
         let name = format!("{}{}", card_to_string(a), card_to_string(b));
         let class = combo_class(combo_index(a, b));
         if let Some(fl) = filter {
             let cn = class_name(class);
-            if !name.eq_ignore_ascii_case(fl) && !cn.eq_ignore_ascii_case(fl) && !cn.to_ascii_lowercase().starts_with(&fl.to_ascii_lowercase()) {
+            if !name.eq_ignore_ascii_case(fl)
+                && !cn.eq_ignore_ascii_case(fl)
+                && !cn.to_ascii_lowercase().starts_with(&fl.to_ascii_lowercase())
+            {
                 continue;
             }
         }
@@ -679,7 +687,8 @@ pub fn render_range(ex: &Explorer, p: usize) -> String {
         num[c] += reach[h] as f64;
         cnt[c] += 1;
     }
-    let mut s = format!("{} range ({:.1} combos), % of each hand's live combos\n", PLAYER_NAMES[p], ex.range_size(p));
+    let mut s =
+        format!("{} range ({:.1} combos), % of each hand's live combos\n", PLAYER_NAMES[p], ex.range_size(p));
     s.push_str(&display::grid(|c| {
         if cnt[c] == 0 || num[c] < 1e-6 {
             dim("  .  ")

@@ -1,0 +1,37 @@
+{
+  "board": "Ks7d2c",
+  "oop_range": "22-QQ,A2s-AQs,K2s-KQs,Q2s-QJs,J4s-JTs,T6s-T9s,96s-98s,85s-87s,74s-76s,63s-65s,52s-54s,43s,A2o-AJo,K7o-KQo,Q8o-QJo,J8o-JTo,T8o-T9o,98o,87o",
+  "ip_range": "22+,A2s+,K2s+,Q4s+,J6s+,T6s+,96s+,85s+,75s+,64s+,54s,A2o+,K8o+,Q9o+,J9o+,T8o+,98o",
+  "pot": 5.5,
+  "stack": 97.5,
+  "flop": {
+    "oop_bet": "33%",
+    "oop_raise": "3x",
+    "ip_bet": "33%",
+    "ip_raise": "3x",
+    "oop_donk": null
+  },
+  "turn": {
+    "oop_bet": "75%",
+    "oop_raise": "3x",
+    "ip_bet": "75%",
+    "ip_raise": "3x",
+    "oop_donk": null
+  },
+  "river": {
+    "oop_bet": "75%",
+    "oop_raise": "3x",
+    "ip_bet": "75%",
+    "ip_raise": "3x",
+    "oop_donk": null
+  },
+  "max_raises": 1,
+  "allin_threshold": 0.67,
+  "add_allin_spr": 1.5,
+  "rake": 0.0,
+  "rake_cap": 0.0,
+  "iterations": 1000,
+  "target_exploitability": 0.3,
+  "isomorphism": true,
+  "compress": false
+}

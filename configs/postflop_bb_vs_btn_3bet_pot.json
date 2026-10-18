@@ -1,0 +1,37 @@
+{
+  "board": "Qs8d4c",
+  "oop_range": "QQ+,AKs,AKo,AQs,A5s,A4s,KQs:0.5",
+  "ip_range": "JJ-77,AJs-ATs,AQo,KQs,KJs,QJs,JTs,T9s,98s",
+  "pot": 20.5,
+  "stack": 90.0,
+  "flop": {
+    "oop_bet": "50%",
+    "oop_raise": "3x",
+    "ip_bet": "50%",
+    "ip_raise": "3x",
+    "oop_donk": null
+  },
+  "turn": {
+    "oop_bet": "50%",
+    "oop_raise": "3x",
+    "ip_bet": "50%",
+    "ip_raise": "3x",
+    "oop_donk": null
+  },
+  "river": {
+    "oop_bet": "50%",
+    "oop_raise": "3x",
+    "ip_bet": "50%",
+    "ip_raise": "3x",
+    "oop_donk": null
+  },
+  "max_raises": 1,
+  "allin_threshold": 0.67,
+  "add_allin_spr": 1.5,
+  "rake": 0.0,
+  "rake_cap": 0.0,
+  "iterations": 1000,
+  "target_exploitability": 0.3,
+  "isomorphism": true,
+  "compress": false
+}

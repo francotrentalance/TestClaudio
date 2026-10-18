@@ -84,11 +84,7 @@ impl StreetSizes {
             Some(s) => Some(parse_sizes(s)?),
             None => None,
         };
-        Ok(ParsedStreet {
-            bet,
-            raise: [parse_sizes(&self.oop_raise)?, parse_sizes(&self.ip_raise)?],
-            donk,
-        })
+        Ok(ParsedStreet { bet, raise: [parse_sizes(&self.oop_raise)?, parse_sizes(&self.ip_raise)?], donk })
     }
 }
 
@@ -129,6 +125,8 @@ pub struct PostflopConfig {
     pub target_exploitability: f64,
     /// Exploit suit symmetry at chance nodes (same result, less time and memory).
     pub isomorphism: bool,
+    /// Store regrets and strategies in 16 bits (half the memory, slightly less precise).
+    pub compress: bool,
 }
 
 impl Default for PostflopConfig {
@@ -140,10 +138,10 @@ impl Default for PostflopConfig {
             ip_range: crate::postflop::DEFAULT_BTN_RANGE.into(),
             pot: 5.5,
             stack: 97.5,
-            flop: StreetSizes::symmetric("33%, 75%", "3x"),
-            turn: StreetSizes::symmetric("66%", "3x"),
+            flop: StreetSizes::symmetric("33%", "3x"),
+            turn: StreetSizes::symmetric("75%", "3x"),
             river: StreetSizes::symmetric("75%", "3x"),
-            max_raises: 2,
+            max_raises: 1,
             allin_threshold: 0.67,
             add_allin_spr: 1.5,
             rake: 0.0,
@@ -151,6 +149,7 @@ impl Default for PostflopConfig {
             iterations: 1000,
             target_exploitability: 0.3,
             isomorphism: true,
+            compress: false,
         }
     }
 }

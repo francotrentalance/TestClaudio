@@ -107,7 +107,9 @@ impl<'a> PExplorer<'a> {
             match self.node().kind {
                 PKind::Decision(q) if q as usize == seat => return true,
                 PKind::Decision(_) => {
-                    let Some(i) = self.actions().iter().position(|a| *a == PAction::Fold) else { return false };
+                    let Some(i) = self.actions().iter().position(|a| *a == PAction::Fold) else {
+                        return false;
+                    };
                     self.take_action(i);
                 }
                 _ => return false,
@@ -145,7 +147,8 @@ impl<'a> PExplorer<'a> {
 
     pub fn range_of(&self, seat: usize) -> Range {
         let r = &self.frame().reach[seat];
-        let w: Vec<f32> = r.iter().map(|&x| if x < 0.005 { 0.0 } else { (x * 1000.0).round() / 1000.0 }).collect();
+        let w: Vec<f32> =
+            r.iter().map(|&x| if x < 0.005 { 0.0 } else { (x * 1000.0).round() / 1000.0 }).collect();
         Range::from_class_weights(&w)
     }
 
@@ -188,18 +191,22 @@ pub fn render(ex: &PExplorer) -> String {
                         .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
                         .map(|(i, &v)| (i, v))
                         .unwrap();
-                    paint(&format!("{:<2}{:>3} ", actions[best].code(), (v * 100.0).round() as i64), kinds[best])
+                    paint(
+                        &format!("{:<2}{:>3} ", actions[best].code(), (v * 100.0).round() as i64),
+                        kinds[best],
+                    )
                 }
             }));
         }
         PKind::Fold(w) => s.push_str(&format!("Terminal: {} wins the pot.\n", names[w as usize])),
         PKind::AllIn => s.push_str("Terminal: all-in showdown.\n"),
         PKind::Flop => {
-            let players: Vec<&str> = (0..ex.solver.cfg.players)
-                .filter(|&p| node.active >> p & 1 == 1)
-                .map(|p| names[p])
-                .collect();
-            s.push_str(&format!("Terminal: flop, {} see it. 'spot' prints the postflop command.\n", players.join(", ")));
+            let players: Vec<&str> =
+                (0..ex.solver.cfg.players).filter(|&p| node.active >> p & 1 == 1).map(|p| names[p]).collect();
+            s.push_str(&format!(
+                "Terminal: flop, {} see it. 'spot' prints the postflop command.\n",
+                players.join(", ")
+            ));
         }
     }
     s
@@ -275,12 +282,8 @@ pub fn rfi_summary(solver: &PreflopSolver) -> Vec<(&'static str, f64)> {
         }
         let (_, overall) = ex.frequencies();
         let actions = ex.actions();
-        let open: f64 = actions
-            .iter()
-            .zip(&overall)
-            .filter(|(a, _)| !matches!(a, PAction::Fold))
-            .map(|(_, &f)| f)
-            .sum();
+        let open: f64 =
+            actions.iter().zip(&overall).filter(|(a, _)| !matches!(a, PAction::Fold)).map(|(_, &f)| f).sum();
         out.push((names[seat], open));
     }
     out
@@ -410,7 +413,8 @@ pub fn export_json(solver: &PreflopSolver) -> Value {
         let actions: Vec<String> = node.children().map(|c| tree.nodes[c].action.label()).collect();
         let mut strategy = serde_json::Map::new();
         for c in 0..NUM_CLASSES {
-            let s: Vec<f64> = solver.average(node, c).iter().map(|&x| (x as f64 * 1000.0).round() / 1000.0).collect();
+            let s: Vec<f64> =
+                solver.average(node, c).iter().map(|&x| (x as f64 * 1000.0).round() / 1000.0).collect();
             strategy.insert(class_name(c), json!(s));
         }
         nodes.push(json!({

@@ -63,10 +63,7 @@ pub fn parse_card(s: &str) -> Result<Card, String> {
 /// Parses a list of cards. Separators (spaces, commas, dashes) are optional:
 /// `"AsKd7h"`, `"As Kd 7h"` and `"As,Kd,7h"` are all accepted. Duplicates are rejected.
 pub fn parse_cards(s: &str) -> Result<Vec<Card>, String> {
-    let chars: Vec<char> = s
-        .chars()
-        .filter(|c| !c.is_whitespace() && *c != ',' && *c != '-')
-        .collect();
+    let chars: Vec<char> = s.chars().filter(|c| !c.is_whitespace() && *c != ',' && *c != '-').collect();
     if !chars.len().is_multiple_of(2) {
         return Err(format!("invalid card list '{s}'"));
     }

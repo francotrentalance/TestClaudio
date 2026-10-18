@@ -31,7 +31,13 @@ fn class_matrix(boards_per_pair: usize) -> (Vec<f64>, Vec<f64>) {
                     }
                 }
                 let (x, y) = (eval_mask(b | combo_mask(h1)), eval_mask(b | combo_mask(h2)));
-                won += if x > y { 1.0 } else if x == y { 0.5 } else { 0.0 };
+                won += if x > y {
+                    1.0
+                } else if x == y {
+                    0.5
+                } else {
+                    0.0
+                };
             }
             let k = combo_class(h1) * NUM_CLASSES + combo_class(h2);
             eq[k] += won / boards_per_pair as f64;

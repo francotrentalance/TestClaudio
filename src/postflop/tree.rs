@@ -82,6 +82,8 @@ pub struct Node {
     pub contrib: [f32; 2],
     /// Offset of this node's `actions x hands` block in the storage (player nodes).
     pub storage: u64,
+    /// Index among player nodes (player nodes), used for per-node data.
+    pub pidx: u32,
     /// Index into the isomorphism table (chance nodes), or [`NONE`].
     pub iso: u32,
 }
@@ -125,7 +127,13 @@ pub fn pair_suits(pair: usize) -> (u8, u8) {
 pub fn swap_card(c: Card, pair: usize) -> Card {
     let (a, b) = pair_suits(pair);
     let s = suit(c);
-    let s2 = if s == a { b } else if s == b { a } else { s };
+    let s2 = if s == a {
+        b
+    } else if s == b {
+        a
+    } else {
+        s
+    };
     make_card(rank(c), s2)
 }
 
@@ -161,6 +169,7 @@ pub struct TreeBuilder<'a> {
     pub nodes: Vec<Node>,
     pub iso_tables: Vec<Vec<IsoEntry>>,
     pub storage_len: u64,
+    pub player_nodes: u32,
 }
 
 impl<'a> TreeBuilder<'a> {
@@ -174,6 +183,7 @@ impl<'a> TreeBuilder<'a> {
             nodes: Vec::new(),
             iso_tables: Vec::new(),
             storage_len: 0,
+            player_nodes: 0,
         })
     }
 
@@ -209,6 +219,7 @@ impl<'a> TreeBuilder<'a> {
                     num_children: 0,
                     contrib: [st.contrib[0] as f32, st.contrib[1] as f32],
                     storage: 0,
+                    pidx: NONE,
                     iso: NONE,
                 };
             }
@@ -221,6 +232,7 @@ impl<'a> TreeBuilder<'a> {
                     num_children: 0,
                     contrib: [st.contrib[0] as f32, st.contrib[1] as f32],
                     storage: 0,
+                    pidx: NONE,
                     iso: NONE,
                 };
             }
@@ -277,6 +289,7 @@ impl<'a> TreeBuilder<'a> {
             num_children: reps.len() as u32,
             contrib: [st.contrib[0] as f32, st.contrib[1] as f32],
             storage: 0,
+            pidx: NONE,
             iso: iso_idx,
         };
         self.nodes.extend((0..reps.len()).map(|_| placeholder()));
@@ -307,8 +320,10 @@ impl<'a> TreeBuilder<'a> {
             num_children: actions.len() as u32,
             contrib: [st.contrib[0] as f32, st.contrib[1] as f32],
             storage: self.storage_len,
+            pidx: self.player_nodes,
             iso: NONE,
         };
+        self.player_nodes += 1;
         self.storage_len += (actions.len() * self.num_hands[p]) as u64;
         self.nodes.extend((0..actions.len()).map(|_| placeholder()));
         for (i, &a) in actions.iter().enumerate() {
@@ -340,7 +355,8 @@ impl<'a> TreeBuilder<'a> {
             }
             Action::Bet(to) | Action::Raise(to) | Action::AllIn(to) => {
                 let to = to as f64;
-                let to = if let Action::AllIn(_) = a { st.street_contrib[p] + self.remaining(st, p) } else { to };
+                let to =
+                    if let Action::AllIn(_) = a { st.street_contrib[p] + self.remaining(st, p) } else { to };
                 s.contrib[p] += to - st.street_contrib[p];
                 s.street_contrib[p] = to;
                 s.last_inc = to - st.street_contrib[o];
@@ -443,6 +459,7 @@ fn placeholder() -> Node {
         num_children: 0,
         contrib: [0.0, 0.0],
         storage: 0,
+        pidx: NONE,
         iso: NONE,
     }
 }

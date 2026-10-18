@@ -1,58 +1,13 @@
 //! A postflop spot instantiated for solving: hands, tree, showdown tables and storage.
 
-use std::cell::UnsafeCell;
-
 use rayon::prelude::*;
 
-use crate::card::{
-    Card, NUM_COMBOS, cards_mask, combo_cards, combo_index, combo_mask, parse_cards,
-};
+use crate::card::{Card, NUM_COMBOS, cards_mask, combo_cards, combo_index, combo_mask, parse_cards};
 use crate::eval::eval_mask;
 use crate::postflop::config::PostflopConfig;
-use crate::postflop::tree::{
-    IsoEntry, NONE, Node, TreeBuilder, board_invariant, pair_suits, swap_card,
-};
+use crate::postflop::storage::{Block, Storage, bytes_per_entry};
+use crate::postflop::tree::{IsoEntry, NONE, Node, TreeBuilder, board_invariant, pair_suits, swap_card};
 use crate::range::Range;
-
-/// A flat `f32` buffer that solver threads write into concurrently.
-///
-/// Safety contract: every player node owns a disjoint `actions x hands` slice,
-/// and parallel recursion only ever splits at chance nodes, whose children are
-/// disjoint subtrees. So no two threads touch the same slice at the same time.
-pub(crate) struct SharedBuf(UnsafeCell<Vec<f32>>);
-
-unsafe impl Sync for SharedBuf {}
-
-impl SharedBuf {
-    pub fn zeros(len: usize) -> Self {
-        SharedBuf(UnsafeCell::new(vec![0.0; len]))
-    }
-
-    pub fn from_vec(v: Vec<f32>) -> Self {
-        SharedBuf(UnsafeCell::new(v))
-    }
-
-    pub fn len(&self) -> usize {
-        unsafe { (*self.0.get()).len() }
-    }
-
-    /// # Safety
-    /// The caller must hold the only live reference to this range (see the type docs).
-    #[allow(clippy::mut_from_ref)]
-    pub unsafe fn slice_mut(&self, off: usize, len: usize) -> &mut [f32] {
-        unsafe { &mut (&mut *self.0.get())[off..off + len] }
-    }
-
-    /// # Safety
-    /// No thread may be writing this range concurrently.
-    pub unsafe fn slice(&self, off: usize, len: usize) -> &[f32] {
-        unsafe { &(&*self.0.get())[off..off + len] }
-    }
-
-    pub fn into_vec(self) -> Vec<f32> {
-        self.0.into_inner()
-    }
-}
 
 /// One hand in a [`RiverEval`] list; the cards are inlined for the showdown sweep.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -90,13 +45,12 @@ pub struct PostflopGame {
     pub iso_tables: Vec<Vec<IsoEntry>>,
     river_slot: Vec<u32>,
     river_evals: Vec<RiverEval>,
-    pub(crate) regrets: SharedBuf,
-    pub(crate) strategy: SharedBuf,
+    pub(crate) storage: Storage,
     pub storage_len: usize,
     pub iteration: u32,
     /// Total weight of all non-conflicting (OOP hand, IP hand) pairs.
     pub norm: f64,
-    /// True once `strategy` holds the normalized average strategy and regrets are dropped.
+    /// True once regrets are dropped and only the average strategy remains.
     pub finalized: bool,
 }
 
@@ -108,12 +62,14 @@ pub struct TreeStats {
     pub chance_nodes: usize,
     pub storage_floats: u64,
     pub hands: [usize; 2],
+    pub compressed: bool,
 }
 
 impl TreeStats {
     /// Bytes needed to solve (regrets + cumulative strategy) plus the node array.
     pub fn solve_bytes(&self) -> u64 {
-        self.storage_floats * 8 + (self.nodes * std::mem::size_of::<Node>()) as u64
+        self.storage_floats * bytes_per_entry(self.compressed)
+            + (self.nodes * std::mem::size_of::<Node>()) as u64
     }
 }
 
@@ -171,10 +127,10 @@ pub fn tree_stats(config: &PostflopConfig) -> Result<TreeStats, String> {
     let num_hands = [s.hands[0].len(), s.hands[1].len()];
     let mut tb = TreeBuilder::new(config, num_hands, s.sym_pairs)?;
     tb.build(&s.board);
-    Ok(stats_of(&tb.nodes, tb.storage_len, num_hands))
+    Ok(stats_of(&tb.nodes, tb.storage_len, num_hands, config.compress))
 }
 
-fn stats_of(nodes: &[Node], storage: u64, hands: [usize; 2]) -> TreeStats {
+fn stats_of(nodes: &[Node], storage: u64, hands: [usize; 2], compressed: bool) -> TreeStats {
     use crate::postflop::tree::NodeKind;
     TreeStats {
         nodes: nodes.len(),
@@ -182,6 +138,7 @@ fn stats_of(nodes: &[Node], storage: u64, hands: [usize; 2]) -> TreeStats {
         chance_nodes: nodes.iter().filter(|n| matches!(n.kind, NodeKind::Chance)).count(),
         storage_floats: storage,
         hands,
+        compressed,
     }
 }
 
@@ -202,15 +159,13 @@ impl PostflopGame {
         let mut tb = TreeBuilder::new(&config, num_hands, sym_pairs)?;
         tb.build(&board);
         let storage_len = tb.storage_len as usize;
+        let player_nodes = tb.player_nodes as usize;
         let nodes = std::mem::take(&mut tb.nodes);
         let iso_tables = std::mem::take(&mut tb.iso_tables);
         drop(tb);
 
         let same_hand = [0, 1].map(|p| {
-            hands[p]
-                .iter()
-                .map(|&(a, b)| hand_index[1 - p][combo_index(a, b)])
-                .collect::<Vec<u32>>()
+            hands[p].iter().map(|&(a, b)| hand_index[1 - p][combo_index(a, b)]).collect::<Vec<u32>>()
         });
         let card_hands = [0, 1].map(|p| {
             let mut v = vec![Vec::new(); 52];
@@ -228,9 +183,7 @@ impl PostflopGame {
                     }
                     hands[p]
                         .iter()
-                        .map(|&(a, b)| {
-                            hand_index[p][combo_index(swap_card(a, pair), swap_card(b, pair))]
-                        })
+                        .map(|&(a, b)| hand_index[p][combo_index(swap_card(a, pair), swap_card(b, pair))])
                         .collect()
                 })
                 .collect::<Vec<Vec<u32>>>()
@@ -254,17 +207,17 @@ impl PostflopGame {
             return Err("the ranges have no non-conflicting hand pairs".into());
         }
 
-        let (regrets, strategy, finalized) = match strategy {
-            Some(s) => {
-                if s.len() != storage_len {
+        let (storage, finalized) = match strategy {
+            Some(st) => {
+                if st.len() != storage_len {
                     return Err(format!(
                         "saved strategy has {} entries but the tree needs {storage_len}",
-                        s.len()
+                        st.len()
                     ));
                 }
-                (SharedBuf::zeros(0), SharedBuf::from_vec(s), true)
+                (Storage::from_average(st), true)
             }
-            None => (SharedBuf::zeros(storage_len), SharedBuf::zeros(storage_len), false),
+            None => (Storage::new(storage_len, player_nodes, config.compress), false),
         };
 
         Ok(PostflopGame {
@@ -280,8 +233,7 @@ impl PostflopGame {
             iso_tables,
             river_slot,
             river_evals,
-            regrets,
-            strategy,
+            storage,
             storage_len,
             iteration: 0,
             norm,
@@ -290,7 +242,12 @@ impl PostflopGame {
     }
 
     pub fn stats(&self) -> TreeStats {
-        stats_of(&self.nodes, self.storage_len as u64, [self.hands[0].len(), self.hands[1].len()])
+        stats_of(
+            &self.nodes,
+            self.storage_len as u64,
+            [self.hands[0].len(), self.hands[1].len()],
+            self.config.compress,
+        )
     }
 
     pub fn num_hands(&self, p: usize) -> usize {
@@ -302,80 +259,59 @@ impl PostflopGame {
         &self.river_evals[self.river_slot[river_key(dealt)] as usize]
     }
 
+    /// Storage block of a player node.
+    pub(crate) fn block(&self, node: &Node) -> Block {
+        let crate::postflop::tree::NodeKind::Player(p) = node.kind else { panic!("not a player node") };
+        Block {
+            off: node.storage as usize,
+            len: node.num_children as usize * self.hands[p as usize].len(),
+            pidx: node.pidx as usize,
+        }
+    }
+
     /// Average strategy of a player node as `actions x hands`, normalized per hand.
     pub fn average_strategy(&self, node: &Node) -> Vec<f32> {
         let crate::postflop::tree::NodeKind::Player(p) = node.kind else {
             return Vec::new();
         };
         let nh = self.hands[p as usize].len();
-        let na = node.num_children as usize;
-        let raw = unsafe { self.strategy.slice(node.storage as usize, na * nh) };
-        if self.finalized {
-            return raw.to_vec();
-        }
-        normalize_strategy(raw, na, nh)
+        // SAFETY: average strategies are read only while no update of this node runs
+        // (between iterations, or by the non-updating player during an iteration).
+        unsafe { self.storage.average(self.block(node), node.num_children as usize, nh) }
     }
 
-    /// Replaces cumulative strategies with normalized averages and frees regrets.
+    fn player_blocks(&self) -> Vec<(Block, usize, usize)> {
+        self.nodes
+            .iter()
+            .filter_map(|n| match n.kind {
+                crate::postflop::tree::NodeKind::Player(p) => {
+                    Some((self.block(n), n.num_children as usize, self.hands[p as usize].len()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Drops regrets, keeping only what is needed to read average strategies.
     pub fn finalize(&mut self) {
         if self.finalized {
             return;
         }
-        let nodes = &self.nodes;
-        let hands = &self.hands;
-        let mut strat = std::mem::replace(&mut self.strategy, SharedBuf::zeros(0)).into_vec();
-        // Player nodes own contiguous, disjoint blocks in node order.
-        let mut blocks: Vec<(usize, usize, usize)> = nodes
-            .iter()
-            .filter_map(|n| match n.kind {
-                crate::postflop::tree::NodeKind::Player(p) => {
-                    Some((n.storage as usize, n.num_children as usize, hands[p as usize].len()))
-                }
-                _ => None,
-            })
-            .collect();
-        blocks.sort_unstable();
-        let mut rest: &mut [f32] = &mut strat;
-        let mut pos = 0;
-        let mut slices = Vec::with_capacity(blocks.len());
-        for &(off, na, nh) in &blocks {
-            let (_, tail) = rest.split_at_mut(off - pos);
-            let (blk, tail) = tail.split_at_mut(na * nh);
-            slices.push((blk, na, nh));
-            rest = tail;
-            pos = off + na * nh;
-        }
-        slices.into_par_iter().for_each(|(blk, na, nh)| {
-            let norm = normalize_strategy(blk, na, nh);
-            blk.copy_from_slice(&norm);
-        });
-        self.strategy = SharedBuf::from_vec(strat);
-        self.regrets = SharedBuf::zeros(0);
+        let blocks = self.player_blocks();
+        self.storage.finalize(&blocks);
         self.finalized = true;
     }
 
-    /// Normalized average strategies for all player nodes (for saving).
-    pub fn strategy_vec(&mut self) -> Vec<f32> {
-        self.finalize();
-        unsafe { self.strategy.slice(0, self.strategy.len()).to_vec() }
-    }
-}
-
-pub(crate) fn normalize_strategy(raw: &[f32], na: usize, nh: usize) -> Vec<f32> {
-    let mut out = vec![0.0f32; na * nh];
-    for h in 0..nh {
-        let sum: f32 = (0..na).map(|a| raw[a * nh + h]).sum();
-        if sum > 0.0 {
-            for a in 0..na {
-                out[a * nh + h] = raw[a * nh + h] / sum;
-            }
-        } else {
-            for a in 0..na {
-                out[a * nh + h] = 1.0 / na as f32;
-            }
+    /// Streams the normalized average strategy of every player node in storage
+    /// order (the layout [`PostflopGame::with_strategy`] expects).
+    pub fn for_each_average_block(&self, mut f: impl FnMut(&[f32])) {
+        let mut blocks = self.player_blocks();
+        blocks.sort_unstable_by_key(|(b, _, _)| b.off);
+        for (b, na, nh) in blocks {
+            // SAFETY: called between iterations.
+            f(&unsafe { self.storage.average(b, na, nh) });
         }
     }
-    out
 }
 
 fn river_key(dealt: &[Card]) -> usize {
@@ -427,8 +363,10 @@ fn build_river_evals(board: &[Card], hands: &[Vec<(Card, Card)>; 2]) -> (Vec<u32
             });
             let bounds = |p: usize| {
                 let (hero, vill) = (&sorted[p], &sorted[1 - p]);
-                let weaker = hero.iter().map(|e| vill.partition_point(|v| v.strength < e.strength) as u32).collect();
-                let stronger = hero.iter().map(|e| vill.partition_point(|v| v.strength <= e.strength) as u32).collect();
+                let weaker =
+                    hero.iter().map(|e| vill.partition_point(|v| v.strength < e.strength) as u32).collect();
+                let stronger =
+                    hero.iter().map(|e| vill.partition_point(|v| v.strength <= e.strength) as u32).collect();
                 (weaker, stronger)
             };
             let (w0, s0) = bounds(0);

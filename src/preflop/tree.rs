@@ -183,9 +183,9 @@ impl Builder<'_> {
             self.nodes[slot] = node;
             return;
         }
-        let next = (0..n).map(|k| (st.to_act + k) % n).find(|&p| {
-            st.needs[p] && !st.folded[p] && !self.is_allin(&st, p)
-        });
+        let next = (0..n)
+            .map(|k| (st.to_act + k) % n)
+            .find(|&p| st.needs[p] && !st.folded[p] && !self.is_allin(&st, p));
         let Some(p) = next else {
             if st.raise_to >= cfg.stack - EPS {
                 node.kind = PKind::AllIn;
@@ -260,7 +260,10 @@ impl Builder<'_> {
                 }
             } else if st.level < cfg.max_raises {
                 let mut to = match st.level {
-                    0 => (if p == cfg.sb_seat() { cfg.sb_open } else { cfg.open }) + cfg.limp_raise_add * st.limpers as f64,
+                    0 => {
+                        (if p == cfg.sb_seat() { cfg.sb_open } else { cfg.open })
+                            + cfg.limp_raise_add * st.limpers as f64
+                    }
                     1 => {
                         let raiser = st.last_raiser.unwrap_or(p);
                         let ip = cfg.postflop_rank(p) > cfg.postflop_rank(raiser);

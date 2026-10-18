@@ -10,8 +10,8 @@
 //! Later tokens override earlier ones, so `22+, 22:0.5` gives deuces half weight.
 
 use crate::card::{
-    Card, NUM_COMBOS, RANK_CHARS, card_bit, combo_cards, combo_index, make_card, parse_cards,
-    parse_rank, rank, suit,
+    Card, NUM_COMBOS, RANK_CHARS, card_bit, combo_cards, combo_index, make_card, parse_cards, parse_rank,
+    rank, suit,
 };
 
 pub const NUM_CLASSES: usize = 169;
@@ -28,11 +28,7 @@ pub fn class_index(r1: u8, r2: u8, suited: bool) -> usize {
 /// `(high rank, low rank, suited)` of a class index.
 pub fn class_ranks(idx: usize) -> (u8, u8, bool) {
     let (row, col) = ((idx / 13) as u8, (idx % 13) as u8);
-    if row < col {
-        (12 - row, 12 - col, true)
-    } else {
-        (12 - col, 12 - row, false)
-    }
+    if row < col { (12 - row, 12 - col, true) } else { (12 - col, 12 - row, false) }
 }
 
 pub fn class_name(idx: usize) -> String {
@@ -155,7 +151,9 @@ fn parse_token(tok: &str) -> Result<Vec<usize>, String> {
     let mut out = Vec::new();
     let chars: Vec<char> = tok.chars().collect();
     // Specific combo such as "AsKh".
-    if chars.len() == 4 && chars[1].is_ascii_alphabetic() && chars[3].is_ascii_alphabetic()
+    if chars.len() == 4
+        && chars[1].is_ascii_alphabetic()
+        && chars[3].is_ascii_alphabetic()
         && crate::card::parse_suit(chars[1]).is_some()
         && crate::card::parse_suit(chars[3]).is_some()
     {

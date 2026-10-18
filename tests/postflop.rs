@@ -44,7 +44,10 @@ fn river_polar_vs_bluffcatcher_matches_theory() {
 
     let s = g.average_strategy(ip);
     let nh = g.num_hands(1);
-    let kk = g.hands[1].iter().position(|&(a, b)| holdem_solver::card::rank(a) == 11 && holdem_solver::card::rank(b) == 11).unwrap();
+    let kk = g.hands[1]
+        .iter()
+        .position(|&(a, b)| holdem_solver::card::rank(a) == 11 && holdem_solver::card::rank(b) == 11)
+        .unwrap();
     assert!(s[nh + kk] > 0.99, "sets always bet, got {}", s[nh + kk]);
     let bluff_combos: f32 = g.hands[1]
         .iter()
@@ -168,4 +171,93 @@ fn card_removal_in_ranges() {
     assert_eq!(g.num_hands(1), 9);
     let b = parse_cards("AhAd").unwrap();
     assert_ne!(g.hand_index[0][combo_index(b[0], b[1])], u32::MAX);
+}
+
+#[test]
+fn compressed_storage_converges_like_full() {
+    let base = PostflopConfig {
+        board: "Ks7d2c9h".into(),
+        oop_range: "22+,A2s+,K9s+,QTs+,JTs,T9s,98s,ATo+,KJo+".into(),
+        ip_range: "22+,A2s+,K5s+,Q8s+,J8s+,T8s+,97s+,86s+,75s+,65s,54s,A8o+,KTo+,QTo+,JTo".into(),
+        pot: 20.0,
+        stack: 80.0,
+        ..PostflopConfig::default()
+    };
+    let mut full = PostflopGame::new(base.clone()).unwrap();
+    let mut comp = PostflopGame::new(PostflopConfig { compress: true, ..base }).unwrap();
+    assert_eq!(
+        comp.stats().solve_bytes() * 2 - full.stats().solve_bytes(),
+        comp.stats().nodes as u64 * std::mem::size_of::<holdem_solver::postflop::Node>() as u64
+    );
+    for _ in 0..300 {
+        full.iterate();
+        comp.iterate();
+    }
+    let (ef, ec) = (full.exploitability_pct(), comp.exploitability_pct());
+    println!("exploitability full {ef:.4}% compressed {ec:.4}%");
+    assert!(ec < ef + 0.15, "compressed {ec}% vs full {ef}%");
+    let (vf, vc) = (full.expected_values(), comp.expected_values());
+    assert!((vf[0] - vc[0]).abs() < 0.05, "{vf:?} vs {vc:?}");
+}
+
+#[test]
+fn save_and_load_roundtrip() {
+    let cfg = PostflopConfig {
+        board: "Kh9d5c3s2h".into(),
+        oop_range: "AA,KK,QQ,AK".into(),
+        ip_range: "KK,QJ,AQ".into(),
+        compress: true,
+        ..PostflopConfig::default()
+    };
+    let mut g = PostflopGame::new(cfg).unwrap();
+    for _ in 0..50 {
+        g.iterate();
+    }
+    let path = std::env::temp_dir().join(format!("hs_roundtrip_{}.bin", std::process::id()));
+    let path = path.to_str().unwrap();
+    holdem_solver::postflop::io::save(&g, path).unwrap();
+    let loaded = holdem_solver::postflop::io::load(path).unwrap();
+    std::fs::remove_file(path).ok();
+    assert_eq!(loaded.iteration, 50);
+    for (a, b) in g.nodes.iter().zip(&loaded.nodes) {
+        if let NodeKind::Player(_) = a.kind {
+            let (sa, sb) = (g.average_strategy(a), loaded.average_strategy(b));
+            assert_eq!(sa, sb);
+        }
+    }
+    let (ea, eb) = (g.expected_values(), loaded.expected_values());
+    assert!((ea[0] - eb[0]).abs() < 1e-4);
+}
+
+#[test]
+fn explorer_equity_matches_equity_module() {
+    use holdem_solver::equity::range_vs_range;
+    use holdem_solver::postflop::explore::Explorer;
+    use holdem_solver::range::Range;
+    let cfg = PostflopConfig {
+        board: "Jh8h3c".into(),
+        oop_range: "TT+,AJs+,KQs,QJs,JTs,T9s,98s,AQo+".into(),
+        ip_range: "22+,A2s+,KTs+,QTs+,J9s+,T8s+,97s+,87s,76s,ATo+,KJo+".into(),
+        ..PostflopConfig::default()
+    };
+    let g = PostflopGame::with_strategy(
+        cfg.clone(),
+        vec![0.0; holdem_solver::postflop::tree_stats(&cfg).unwrap().storage_floats as usize],
+    )
+    .unwrap();
+    let ex = Explorer::new(&g);
+    let eq = ex.equity(0);
+    let board = parse_cards(&cfg.board).unwrap();
+    let res = range_vs_range(
+        &Range::parse(&cfg.oop_range).unwrap(),
+        &Range::parse(&cfg.ip_range).unwrap(),
+        &board,
+        0,
+        0,
+    );
+    assert!(res.exact);
+    for &(combo, e, _) in &res.hands[0] {
+        let h = g.hand_index[0][combo] as usize;
+        assert!((eq[h] as f64 - e).abs() < 1e-4, "combo {combo}: {} vs {e}", eq[h]);
+    }
 }

@@ -24,11 +24,7 @@ impl Discount {
     pub fn for_iteration(t: u32) -> Self {
         let prev = (t.saturating_sub(1)) as f64;
         let ta = prev.powf(1.5);
-        Discount {
-            pos: (ta / (ta + 1.0)) as f32,
-            neg: 0.5,
-            strat: ((prev / t as f64).powi(2)) as f32,
-        }
+        Discount { pos: (ta / (ta + 1.0)) as f32, neg: 0.5, strat: ((prev / t as f64).powi(2)) as f32 }
     }
 }
 
@@ -112,11 +108,7 @@ impl PostflopGame {
             Dealt::default(),
             mode,
         );
-        let total: f64 = cfv
-            .iter()
-            .zip(&self.initial_weights[p])
-            .map(|(&v, &w)| v as f64 * w as f64)
-            .sum();
+        let total: f64 = cfv.iter().zip(&self.initial_weights[p]).map(|(&v, &w)| v as f64 * w as f64).sum();
         total / self.norm + self.config.pot / 2.0
     }
 
@@ -173,14 +165,13 @@ impl PostflopGame {
     ) -> Vec<f32> {
         let nh = self.hands[p].len();
         let na = node.num_children as usize;
-        let off = node.storage as usize;
         let first = node.first_child as usize;
 
         match mode {
             Mode::Cfr(d) => {
+                let block = self.block(node);
                 // SAFETY: this node's block is touched only by the thread recursing into it.
-                let regrets = unsafe { self.regrets.slice_mut(off, na * nh) };
-                let strat = regret_matching(regrets, na, nh);
+                let strat = regret_matching(&unsafe { self.storage.regrets(block) }, na, nh);
                 let mut child_vals = Vec::with_capacity(na);
                 for a in 0..na {
                     let s = &strat[a * nh..(a + 1) * nh];
@@ -194,23 +185,26 @@ impl PostflopGame {
                         value[h] += s[h] * child_vals[a][h];
                     }
                 }
-                for a in 0..na {
-                    let row = &mut regrets[a * nh..(a + 1) * nh];
-                    let cv = &child_vals[a];
-                    for h in 0..nh {
-                        let r = row[h];
-                        let disc = if r >= 0.0 { d.pos } else { d.neg };
-                        row[h] = r * disc + cv[h] - value[h];
-                    }
-                }
-                // SAFETY: same block ownership as above.
-                let cum = unsafe { self.strategy.slice_mut(off, na * nh) };
-                for a in 0..na {
-                    let row = &mut cum[a * nh..(a + 1) * nh];
-                    let s = &strat[a * nh..(a + 1) * nh];
-                    for h in 0..nh {
-                        row[h] = row[h] * d.strat + reach_p[h] * s[h];
-                    }
+                // SAFETY: as above.
+                unsafe {
+                    self.storage.update(block, |regrets, cum| {
+                        for a in 0..na {
+                            let row = &mut regrets[a * nh..(a + 1) * nh];
+                            let cv = &child_vals[a];
+                            for h in 0..nh {
+                                let r = row[h];
+                                let disc = if r >= 0.0 { d.pos } else { d.neg };
+                                row[h] = r * disc + cv[h] - value[h];
+                            }
+                        }
+                        for a in 0..na {
+                            let row = &mut cum[a * nh..(a + 1) * nh];
+                            let s = &strat[a * nh..(a + 1) * nh];
+                            for h in 0..nh {
+                                row[h] = row[h] * d.strat + reach_p[h] * s[h];
+                            }
+                        }
+                    });
                 }
                 value
             }
@@ -256,8 +250,7 @@ impl PostflopGame {
         let strat = match mode {
             Mode::Cfr(_) => {
                 // SAFETY: read-only access; the opponent's block is written only on its own pass.
-                let regrets = unsafe { self.regrets.slice(node.storage as usize, na * no) };
-                regret_matching(regrets, na, no)
+                regret_matching(&unsafe { self.storage.regrets(self.block(node)) }, na, no)
             }
             _ => self.average_strategy(node),
         };
@@ -289,32 +282,27 @@ impl PostflopGame {
         let nh = self.hands[p].len();
         // Each (hand, hand) pair leaves 52 - board - 4 cards that can come.
         let deals = (52 - node.board_len as usize - 4) as f32;
-        let results: Vec<Vec<f32>> = node
-            .children()
-            .into_par_iter()
-            .map(|ci| {
-                let Action::Deal(card) = self.nodes[ci].action else {
-                    unreachable!("chance children are deals")
-                };
-                let mut rp = reach_p.to_vec();
-                for &h in &self.card_hands[p][card as usize] {
-                    rp[h as usize] = 0.0;
-                }
-                let mut ro = reach_o.to_vec();
-                for &h in &self.card_hands[o][card as usize] {
-                    ro[h as usize] = 0.0;
-                }
-                let mut v = if ro.iter().all(|&r| r == 0.0) {
-                    vec![0.0; nh]
-                } else {
-                    self.recurse(ci, p, &rp, &ro, dealt.push(card), mode)
-                };
-                for &h in &self.card_hands[p][card as usize] {
-                    v[h as usize] = 0.0;
-                }
-                v
-            })
-            .collect();
+        let deal = |ci: usize| {
+            let Action::Deal(card) = self.nodes[ci].action else { unreachable!("chance children are deals") };
+            let mut rp = reach_p.to_vec();
+            for &h in &self.card_hands[p][card as usize] {
+                rp[h as usize] = 0.0;
+            }
+            let mut ro = reach_o.to_vec();
+            for &h in &self.card_hands[o][card as usize] {
+                ro[h as usize] = 0.0;
+            }
+            let mut v = if ro.iter().all(|&r| r == 0.0) {
+                vec![0.0; nh]
+            } else {
+                self.recurse(ci, p, &rp, &ro, dealt.push(card), mode)
+            };
+            for &h in &self.card_hands[p][card as usize] {
+                v[h as usize] = 0.0;
+            }
+            v
+        };
+        let results: Vec<Vec<f32>> = node.children().into_par_iter().map(deal).collect();
 
         let mut total = vec![0.0f32; nh];
         for v in &results {
@@ -448,8 +436,7 @@ impl PostflopGame {
         let nh = self.hands[q as usize].len();
         let na = node.num_children as usize;
         // SAFETY: called between iterations, when nothing writes the storage.
-        let r = unsafe { self.regrets.slice(node.storage as usize, na * nh) };
-        regret_matching(r, na, nh)
+        regret_matching(&unsafe { self.storage.regrets(self.block(node)) }, na, nh)
     }
 }
 
@@ -523,7 +510,14 @@ mod tests {
                 }
                 for p in 0..2 {
                     let reach_o: Vec<f32> = (0..g.num_hands(1 - p)).map(|_| rng.unit_f32()).collect();
-                    let fast = g.recurse(idx, p, &vec![1.0; g.num_hands(p)], &reach_o, Dealt::default(), Mode::Average);
+                    let fast = g.recurse(
+                        idx,
+                        p,
+                        &vec![1.0; g.num_hands(p)],
+                        &reach_o,
+                        Dealt::default(),
+                        Mode::Average,
+                    );
                     let slow = brute(&g, node, p, &reach_o);
                     for (h, (&f, &s)) in fast.iter().zip(&slow).enumerate() {
                         assert!(
@@ -537,4 +531,3 @@ mod tests {
         }
     }
 }
-

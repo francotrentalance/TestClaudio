@@ -268,11 +268,7 @@ impl PreflopSolver {
         let base = node.storage as usize + class * na;
         let raw: Vec<f32> = self.strategy[base..base + na].iter().map(load).collect();
         let sum: f32 = raw.iter().sum();
-        if sum > 0.0 {
-            raw.iter().map(|x| x / sum).collect()
-        } else {
-            vec![1.0 / na as f32; na]
-        }
+        if sum > 0.0 { raw.iter().map(|x| x / sum).collect() } else { vec![1.0 / na as f32; na] }
     }
 
     /// Normalized average strategies of all decision nodes (for saving).

@@ -16,19 +16,27 @@ use crate::postflop::tree::NodeKind;
 
 const MAGIC: &[u8; 8] = b"HSPOST01";
 
-pub fn save(game: &mut PostflopGame, path: &str) -> Result<(), String> {
-    let strategy = game.strategy_vec();
-    let cfg = serde_json::to_vec(&game.config).map_err(|e| e.to_string())?;
+pub fn save(game: &PostflopGame, path: &str) -> Result<(), String> {
+    let mut cfg_saved = game.config.clone();
+    // A saved solution is always plain f32 average strategies.
+    cfg_saved.compress = false;
+    let cfg = serde_json::to_vec(&cfg_saved).map_err(|e| e.to_string())?;
     let mut w = BufWriter::new(File::create(path).map_err(|e| format!("{path}: {e}"))?);
     let io = |e: std::io::Error| e.to_string();
     w.write_all(MAGIC).map_err(io)?;
     w.write_all(&(cfg.len() as u64).to_le_bytes()).map_err(io)?;
     w.write_all(&cfg).map_err(io)?;
     w.write_all(&game.iteration.to_le_bytes()).map_err(io)?;
-    w.write_all(&(strategy.len() as u64).to_le_bytes()).map_err(io)?;
-    for chunk in strategy.chunks(1 << 16) {
-        let bytes: Vec<u8> = chunk.iter().flat_map(|x| x.to_le_bytes()).collect();
-        w.write_all(&bytes).map_err(io)?;
+    w.write_all(&(game.storage_len as u64).to_le_bytes()).map_err(io)?;
+    let mut err = None;
+    game.for_each_average_block(|blk| {
+        if err.is_none() {
+            let bytes: Vec<u8> = blk.iter().flat_map(|x| x.to_le_bytes()).collect();
+            err = w.write_all(&bytes).err();
+        }
+    });
+    if let Some(e) = err {
+        return Err(e.to_string());
     }
     w.flush().map_err(io)
 }
@@ -53,7 +61,8 @@ pub fn load(path: &str) -> Result<PostflopGame, String> {
     let n = u64::from_le_bytes(u64b) as usize;
     let mut bytes = vec![0u8; n * 4];
     r.read_exact(&mut bytes).map_err(io)?;
-    let strategy: Vec<f32> = bytes.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+    let strategy: Vec<f32> =
+        bytes.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
     let mut game = PostflopGame::with_strategy(config, strategy)?;
     game.iteration = iteration;
     Ok(game)

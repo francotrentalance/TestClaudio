@@ -10,8 +10,8 @@
 
 pub mod card;
 pub mod display;
-pub mod eval;
-pub mod range;
 pub mod equity;
+pub mod eval;
 pub mod postflop;
 pub mod preflop;
+pub mod range;

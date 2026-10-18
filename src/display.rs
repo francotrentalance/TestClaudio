@@ -24,7 +24,10 @@ pub enum ActionKind {
     Fold,
     Passive,
     /// Aggressive action; `level` 0 is the smallest size at the node.
-    Aggressive { level: usize, allin: bool },
+    Aggressive {
+        level: usize,
+        allin: bool,
+    },
 }
 
 fn bg_code(kind: ActionKind) -> u8 {
