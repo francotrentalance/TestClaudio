@@ -50,6 +50,10 @@ pub struct PreflopConfig {
     /// Postflop model: pot shares are proportional to `realization * equity^exponent`.
     /// Exponents above 1 make strong hands over-realize and weak hands under-realize.
     pub realization_exponent: f64,
+    /// Postflop model with hand-dependent realization measured from postflop
+    /// solves. When set, it replaces `realization_oop`: pot shares are
+    /// proportional to `eqr(position, SPR, hand) * equity^exponent`.
+    pub eqr: Option<EqrModel>,
     /// Rake fraction and cap (bb), taken from pots that see a flop.
     pub rake: f64,
     pub rake_cap: f64,
@@ -86,6 +90,7 @@ impl Default for PreflopConfig {
             max_cold_callers: 2,
             realization_oop: 0.75,
             realization_exponent: 1.4,
+            eqr: None,
             rake: 0.0,
             rake_cap: 0.0,
             iterations: 20_000_000,
@@ -109,6 +114,9 @@ impl PreflopConfig {
         }
         if self.realization_oop <= 0.0 || self.realization_exponent <= 0.0 {
             return Err("realization parameters must be positive".into());
+        }
+        if let Some(m) = &self.eqr {
+            m.validate()?;
         }
         Ok(())
     }
@@ -154,5 +162,112 @@ impl PreflopConfig {
         } else {
             r
         }
+    }
+}
+
+/// Equity realization (EQR) of each starting hand, measured from postflop
+/// solves: the share of the pot a hand wins on average divided by its raw
+/// equity share. Measured at two stack-to-pot ratios (a single-raised pot
+/// and a 3-bet pot) for the player first and last to act postflop.
+///
+/// For a flop with stack-to-pot ratio `s` the factor is taken from the deep
+/// table when `s >= deep_spr`, interpolated in `ln s` between the two tables
+/// down to `shallow_spr`, and from there toward 1 (no realization edge) at
+/// `s <= 1`, where little play is left after the flop. Players between the
+/// first and the last to act interpolate by position.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct EqrModel {
+    pub deep_spr: f64,
+    pub shallow_spr: f64,
+    /// 169 values each, indexed by starting-hand class.
+    pub deep_oop: Vec<f32>,
+    pub deep_ip: Vec<f32>,
+    pub shallow_oop: Vec<f32>,
+    pub shallow_ip: Vec<f32>,
+}
+
+impl EqrModel {
+    pub fn validate(&self) -> Result<(), String> {
+        if !(self.shallow_spr > 1.0 && self.deep_spr > self.shallow_spr) {
+            return Err("eqr: need 1 < shallow_spr < deep_spr".into());
+        }
+        for t in [&self.deep_oop, &self.deep_ip, &self.shallow_oop, &self.shallow_ip] {
+            if t.len() != crate::range::NUM_CLASSES || t.iter().any(|&x| !(x > 0.0 && x.is_finite())) {
+                return Err("eqr: each table needs 169 positive values".into());
+            }
+        }
+        Ok(())
+    }
+
+    /// Weights of the deep table, the shallow table and plain equity (factor 1)
+    /// at stack-to-pot ratio `spr`.
+    pub fn mix(&self, spr: f64) -> [f32; 3] {
+        let (deep, shallow) = (self.deep_spr, self.shallow_spr);
+        if spr >= deep {
+            [1.0, 0.0, 0.0]
+        } else if spr >= shallow {
+            let u = ((spr.ln() - shallow.ln()) / (deep.ln() - shallow.ln())) as f32;
+            [u, 1.0 - u, 0.0]
+        } else if spr > 1.0 {
+            let u = (spr.ln() / shallow.ln()) as f32;
+            [0.0, u, 1.0 - u]
+        } else {
+            [0.0, 0.0, 1.0]
+        }
+    }
+
+    /// Realization factor of `class` for a player at position `t` (0 = first
+    /// to act postflop, 1 = last) on a flop whose [`EqrModel::mix`] is `mix`.
+    #[inline]
+    pub fn factor(&self, mix: [f32; 3], t: f32, class: usize) -> f32 {
+        let deep = self.deep_oop[class] + (self.deep_ip[class] - self.deep_oop[class]) * t;
+        let shallow = self.shallow_oop[class] + (self.shallow_ip[class] - self.shallow_oop[class]) * t;
+        mix[0] * deep + mix[1] * shallow + mix[2]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn model() -> EqrModel {
+        let n = crate::range::NUM_CLASSES;
+        EqrModel {
+            deep_spr: 16.0,
+            shallow_spr: 4.0,
+            deep_oop: vec![0.8; n],
+            deep_ip: vec![1.2; n],
+            shallow_oop: vec![0.9; n],
+            shallow_ip: vec![1.1; n],
+        }
+    }
+
+    #[test]
+    fn eqr_mix_is_continuous_and_sums_to_one() {
+        let m = model();
+        assert_eq!(m.mix(20.0), [1.0, 0.0, 0.0]);
+        assert_eq!(m.mix(0.5), [0.0, 0.0, 1.0]);
+        let s = m.mix(4.0);
+        assert!((s[1] - 1.0).abs() < 1e-6, "{s:?}");
+        let s = m.mix(8.0); // halfway between 4 and 16 in ln(spr)
+        assert!((s[0] - 0.5).abs() < 1e-5 && (s[1] - 0.5).abs() < 1e-5, "{s:?}");
+        let s = m.mix(2.0); // halfway between 1 and 4
+        assert!((s[1] - 0.5).abs() < 1e-5 && (s[2] - 0.5).abs() < 1e-5, "{s:?}");
+        for spr in [0.3, 1.0, 1.5, 3.9, 4.1, 10.0, 15.9, 16.1, 40.0] {
+            let s = m.mix(spr);
+            assert!((s.iter().sum::<f32>() - 1.0).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn eqr_factor_interpolates_position_and_depth() {
+        let m = model();
+        assert!((m.factor([1.0, 0.0, 0.0], 0.0, 5) - 0.8).abs() < 1e-6);
+        assert!((m.factor([1.0, 0.0, 0.0], 1.0, 5) - 1.2).abs() < 1e-6);
+        assert!((m.factor([0.0, 1.0, 0.0], 0.5, 5) - 1.0).abs() < 1e-6);
+        assert!((m.factor([0.0, 0.0, 1.0], 0.0, 5) - 1.0).abs() < 1e-6);
+        assert!(m.validate().is_ok());
+        assert!(EqrModel { deep_spr: 3.0, ..model() }.validate().is_err());
     }
 }

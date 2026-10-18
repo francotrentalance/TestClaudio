@@ -119,17 +119,27 @@ impl Deal {
     }
 
     /// Pot shares under the realization model for a flop terminal.
-    fn realized_equity(&mut self, node: &PNode, exponent: f32) -> [f32; MAX_PLAYERS] {
+    fn realized_equity(&mut self, node: &PNode, cfg: &PreflopConfig) -> [f32; MAX_PLAYERS] {
         let active = node.active;
-        if let Some(e) = self.realized[active as usize] {
-            return e;
+        // Positional shares depend only on who is in; hand-dependent ones also
+        // on the flop's stack-to-pot ratio, so they are not cached.
+        if cfg.eqr.is_none() {
+            if let Some(e) = self.realized[active as usize] {
+                return e;
+            }
         }
+        let exponent = cfg.realization_exponent as f32;
         let raw = self.raw_equity(active);
         let mut w = [0.0f32; MAX_PLAYERS];
         let mut sum = 0.0;
         for p in 0..MAX_PLAYERS {
             if active >> p & 1 == 1 {
-                w[p] = node.realization[p] * raw[p].powf(exponent);
+                let r = match &cfg.eqr {
+                    Some(m) => m.factor(node.eqr_mix, node.position[p], self.class[p]),
+                    None => node.realization[p],
+                };
+                let e = if exponent == 1.0 { raw[p] } else { raw[p].powf(exponent) };
+                w[p] = r * e;
                 sum += w[p];
             }
         }
@@ -138,7 +148,9 @@ impl Deal {
         } else {
             w = raw;
         }
-        self.realized[active as usize] = Some(w);
+        if cfg.eqr.is_none() {
+            self.realized[active as usize] = Some(w);
+        }
         w
     }
 }
@@ -208,7 +220,7 @@ impl PreflopSolver {
         let share = match node.kind {
             PKind::Fold(_) => return node.pot - node.invested[p],
             PKind::AllIn => deal.raw_equity(node.active)[p],
-            PKind::Flop => deal.realized_equity(node, self.cfg.realization_exponent as f32)[p],
+            PKind::Flop => deal.realized_equity(node, &self.cfg)[p],
             PKind::Decision(_) => unreachable!(),
         };
         let rake = self.cfg.rake_amount(node.pot as f64) as f32;

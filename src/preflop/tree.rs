@@ -71,6 +71,12 @@ pub struct PNode {
     pub invested: [f32; MAX_PLAYERS],
     /// Flop terminals: realization factor of each active player.
     pub realization: [f32; MAX_PLAYERS],
+    /// Flop terminals: postflop position of each active player, 0 = first to
+    /// act, 1 = last.
+    pub position: [f32; MAX_PLAYERS],
+    /// Flop terminals with an [`crate::preflop::EqrModel`]: its table weights
+    /// at this flop's stack-to-pot ratio.
+    pub eqr_mix: [f32; 3],
 }
 
 impl PNode {
@@ -176,6 +182,8 @@ impl Builder<'_> {
             pot,
             invested,
             realization: [0.0; MAX_PLAYERS],
+            position: [0.0; MAX_PLAYERS],
+            eqr_mix: [0.0; 3],
         };
 
         if active.count_ones() == 1 {
@@ -191,7 +199,12 @@ impl Builder<'_> {
                 node.kind = PKind::AllIn;
             } else {
                 node.kind = PKind::Flop;
-                node.realization = self.realization(active);
+                node.position = self.positions(active);
+                node.realization = self.realization(&node.position, active);
+                if let Some(m) = &cfg.eqr {
+                    let behind = cfg.stack - st.raise_to;
+                    node.eqr_mix = m.mix(behind / pot as f64);
+                }
             }
             self.nodes[slot] = node;
             return;
@@ -215,15 +228,26 @@ impl Builder<'_> {
         }
     }
 
-    fn realization(&self, active: u8) -> [f32; MAX_PLAYERS] {
+    /// Postflop order of the active players as 0 (first to act) .. 1 (last).
+    fn positions(&self, active: u8) -> [f32; MAX_PLAYERS] {
         let cfg = self.cfg;
         let mut seats: Vec<usize> = (0..cfg.players).filter(|&p| active >> p & 1 == 1).collect();
         seats.sort_by_key(|&p| cfg.postflop_rank(p));
         let k = seats.len();
-        let mut r = [0.0f32; MAX_PLAYERS];
+        let mut t = [0.0f32; MAX_PLAYERS];
         for (i, &p) in seats.iter().enumerate() {
-            let t = if k > 1 { i as f64 / (k - 1) as f64 } else { 1.0 };
-            r[p] = (cfg.realization_oop + (1.0 - cfg.realization_oop) * t) as f32;
+            t[p] = if k > 1 { i as f32 / (k - 1) as f32 } else { 1.0 };
+        }
+        t
+    }
+
+    fn realization(&self, position: &[f32; MAX_PLAYERS], active: u8) -> [f32; MAX_PLAYERS] {
+        let cfg = self.cfg;
+        let mut r = [0.0f32; MAX_PLAYERS];
+        for p in 0..cfg.players {
+            if active >> p & 1 == 1 {
+                r[p] = (cfg.realization_oop + (1.0 - cfg.realization_oop) * position[p] as f64) as f32;
+            }
         }
         r
     }
@@ -344,6 +368,8 @@ fn placeholder() -> PNode {
         pot: 0.0,
         invested: [0.0; MAX_PLAYERS],
         realization: [0.0; MAX_PLAYERS],
+        position: [0.0; MAX_PLAYERS],
+        eqr_mix: [0.0; 3],
     }
 }
 

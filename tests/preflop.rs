@@ -153,3 +153,37 @@ fn heads_up_pushfold_matches_exact_solution() {
     assert!(diff(&m_push, &push) < 0.03, "push per-hand diff {}", diff(&m_push, &push));
     assert!(diff(&m_call, &call) < 0.03, "call per-hand diff {}", diff(&m_call, &call));
 }
+
+/// Flop terminals carry each player's postflop position and the EQR table
+/// weights for their stack-to-pot ratio.
+#[test]
+fn flop_terminals_get_eqr_mix_and_positions() {
+    use holdem_solver::preflop::{EqrModel, PAction, PreflopTree};
+    let n = NUM_CLASSES;
+    let eqr = EqrModel {
+        deep_spr: 97.5 / 5.5,
+        shallow_spr: 90.0 / 20.5,
+        deep_oop: vec![1.0; n],
+        deep_ip: vec![1.0; n],
+        shallow_oop: vec![1.0; n],
+        shallow_ip: vec![1.0; n],
+    };
+    let cfg = PreflopConfig { eqr: Some(eqr), ..PreflopConfig::default() };
+    let tree = PreflopTree::build(&cfg).unwrap();
+    let child = |node: usize, f: &dyn Fn(PAction) -> bool| tree.nodes[node].children().find(|&c| f(tree.nodes[c].action)).unwrap();
+    let fold = |a: PAction| a == PAction::Fold;
+    let raise = |a: PAction| matches!(a, PAction::Raise(_));
+    let call = |a: PAction| a == PAction::Call;
+    // UTG, HJ, CO fold; BTN opens; SB folds; BB calls.
+    let btn = (0..3).fold(0, |n, _| child(n, &fold));
+    let bb = child(child(btn, &raise), &fold);
+    let flop = &tree.nodes[child(bb, &call)];
+    assert_eq!(flop.kind, PKind::Flop);
+    assert!((flop.eqr_mix[0] - 1.0).abs() < 1e-4, "{:?}", flop.eqr_mix);
+    assert_eq!(flop.position[5], 0.0, "BB acts first postflop");
+    assert_eq!(flop.position[3], 1.0, "BTN acts last");
+    // BB 3-bets and BTN calls: the shallow table.
+    let flop = &tree.nodes[child(child(bb, &raise), &call)];
+    assert_eq!(flop.kind, PKind::Flop);
+    assert!((flop.eqr_mix[1] - 1.0).abs() < 1e-4, "{:?}", flop.eqr_mix);
+}
