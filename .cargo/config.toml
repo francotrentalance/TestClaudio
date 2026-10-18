@@ -2,3 +2,8 @@
 # Remove this if you need a binary that runs on other CPUs.
 [build]
 rustflags = ["-C", "target-cpu=native"]
+
+# When dependencies are updated, pick versions that still build with the
+# Rust in Cargo.toml's rust-version (1.75, what Linux Mint's apt installs).
+[resolver]
+incompatible-rust-versions = "fallback"

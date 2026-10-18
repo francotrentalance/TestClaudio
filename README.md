@@ -17,7 +17,7 @@ You go from one to the other: solve preflop, walk to a flop terminal (e.g. *BTN 
 
 ## Install on Linux Mint
 
-Tested on Linux Mint 22, Mint 21.3 and LMDE 6 (clean installs, as a normal user with sudo).
+Tested on Linux Mint 22, Mint 21.3 and LMDE 6, as a normal user with sudo and in the awkward cases listed under [Troubleshooting](#troubleshooting).
 
 ```sh
 git clone https://github.com/francotrentalance/TestClaudio.git holdem-solver
@@ -25,13 +25,16 @@ cd holdem-solver
 ./install.sh
 ```
 
+Run it as your normal user, **not** with `sudo`. It asks for your password only when it installs packages.
+
 `install.sh`:
 
 1. Installs `build-essential` if there is no C compiler. The solver links a small C memory allocator.
 2. Picks a Rust compiler:
-   * **Mint 21 / 22:** Mint's own Rust packages are new enough (Rust 1.75), so it runs `sudo apt install cargo rustc`.
-   * **LMDE 6:** its Rust (1.63) is too old, so it installs current Rust with [rustup](https://rustup.rs) into `~/.cargo`. No sudo is needed for that step.
-3. Builds, installs the binary to `~/.local/bin/holdem-solver`, and adds that directory to PATH in `~/.bashrc`. Mint only adds `~/.local/bin` to PATH at login, so without this a new terminal wouldn't find the command until you log out and back in.
+   * **Mint 21 / 22:** Mint's own Rust packages are new enough (Rust 1.75), so it runs `apt install cargo rustc`.
+   * **LMDE 6, or an account without admin rights:** it installs current Rust with [rustup](https://rustup.rs) into `~/.cargo`, which needs no sudo.
+   * **If you already have rustup:** it uses rustup's stable Rust for this build and leaves your default toolchain alone.
+3. Builds, installs the binary to `~/.local/bin/holdem-solver`, and adds that directory to PATH in your shell's startup file (`~/.bashrc`, `~/.zshrc`, or fish's `conf.d`). Mint only adds `~/.local/bin` to PATH at login, so without this a new terminal wouldn't find the command until you log out and back in.
 
 Options:
 
@@ -39,11 +42,26 @@ Options:
 * `--prefix DIR` installs somewhere else.
 * `--no-install` only builds.
 
-To uninstall, delete `~/.local/bin/holdem-solver` and the line marked `added by holdem-solver install.sh` in `~/.bashrc`.
+To update later: `git pull && ./install.sh`.
+
+To uninstall, delete `~/.local/bin/holdem-solver` and the line marked `added by holdem-solver install.sh` in your shell's startup file.
+
+### Troubleshooting
+
+| You see | What it means / what to do |
+|---|---|
+| `NO_PUBKEY ...` or `The repository '...' is not signed` | A third-party repository on your system (Google, Spotify, ...) has a missing or expired signing key. The installer doesn't need it and carries on. To fix the repository itself: **Software Sources → Maintenance → Add missing keys**, or disable it there. |
+| `Another program (Update Manager?) is using apt; waiting...` | Update Manager or Software Manager is installing something. The installer waits up to 10 minutes; you can also let the other program finish and re-run. |
+| `don't run this with sudo` | Run `./install.sh` without `sudo`. If an earlier `sudo` run left a root-owned `target/`, fix it with `sudo chown -R $USER: target`. |
+| `This account cannot use sudo` | Fine: it switches to rustup, which installs into your home directory. You still need a C compiler; ask an administrator for `sudo apt install build-essential` if `cc` is missing. |
+| `holdem-solver: command not found` right after installing | Open a new terminal, or run the `export PATH=...` line the installer printed. |
+| `sh install.sh` / `bash install.sh` | Both work; the script re-runs itself under bash. |
 
 ## Build manually (any Linux)
 
 Requires Rust ≥ 1.75 and a C compiler (`gcc`/`cc`).
+
+The minimum Rust version is part of the project: `Cargo.toml` declares `rust-version = "1.75"`, and `.cargo/config.toml` makes `cargo update` choose dependency versions that still build on it, so Linux Mint's packaged Rust keeps working.
 
 ```sh
 cargo build --release
