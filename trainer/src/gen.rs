@@ -315,6 +315,16 @@ impl EqrSums {
         let z = || vec![0.0; NUM_CLASSES];
         EqrSums { pot, weight: [z(), z()], ev: [z(), z()], equity_pot: [z(), z()] }
     }
+
+    pub fn add(&mut self, other: &EqrSums) {
+        for p in 0..2 {
+            for c in 0..NUM_CLASSES {
+                self.weight[p][c] += other.weight[p][c];
+                self.ev[p][c] += other.ev[p][c];
+                self.equity_pot[p][c] += other.equity_pot[p][c];
+            }
+        }
+    }
 }
 
 /// Random flops for measuring realization (fixed seed, so runs are repeatable).
@@ -332,6 +342,61 @@ pub fn sample_flops(n: usize, seed: u64) -> Vec<String> {
             holdem_solver::card::cards_to_string(&cards)
         })
         .collect()
+}
+
+/// Flops for measuring realization: 26 per set, with every rank exactly 6
+/// times (so no hand gains or loses from its ranks hitting the sample more or
+/// less often than they should) and natural suit and pairing patterns,
+/// checked loosely. Deterministic for a given seed.
+pub fn calibration_flops(sets: usize, seed: u64) -> Vec<String> {
+    let mut rng = Rng::new(seed);
+    let mut out = Vec::new();
+    while out.len() < 26 * sets {
+        let mut ranks: Vec<u8> = (0..13).flat_map(|r| [r; 6]).collect();
+        for i in (1..ranks.len()).rev() {
+            ranks.swap(i, rng.below(i as u32 + 1) as usize);
+        }
+        let mut flops = Vec::new();
+        let mut ok = true;
+        for t in ranks.chunks(3) {
+            if t[0] == t[1] && t[1] == t[2] {
+                ok = false;
+                break;
+            }
+            // Suits uniformly at random, redrawn on a clash within a pair.
+            let mut cards: Vec<Card> = Vec::new();
+            for &r in t {
+                loop {
+                    let c = holdem_solver::card::make_card(r, rng.below(4) as u8);
+                    if !cards.contains(&c) {
+                        cards.push(c);
+                        break;
+                    }
+                }
+            }
+            flops.push(cards);
+        }
+        if !ok {
+            continue;
+        }
+        let suits = |f: &[Card]| {
+            let mut s: Vec<u8> = f.iter().map(|&c| holdem_solver::card::suit(c)).collect();
+            s.sort_unstable();
+            s.dedup();
+            s.len()
+        };
+        let monotone = flops.iter().filter(|f| suits(f) == 1).count();
+        let two_tone = flops.iter().filter(|f| suits(f) == 2).count();
+        let paired = flops.iter().filter(|f| {
+            let r: Vec<u8> = f.iter().map(|&c| holdem_solver::card::rank(c)).collect();
+            r[0] == r[1] || r[1] == r[2] || r[0] == r[2]
+        }).count();
+        // Natural rates: monotone 5%, two-tone 55%, paired 17%.
+        if monotone <= 2 && (11..=17).contains(&two_tone) && (3..=6).contains(&paired) {
+            out.extend(flops.iter().map(|f| holdem_solver::card::cards_to_string(f)));
+        }
+    }
+    out
 }
 
 /// Range weight of hands outside a range while measuring realization.

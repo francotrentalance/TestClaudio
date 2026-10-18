@@ -124,23 +124,34 @@ fn main() {
     let start = Instant::now();
     match args.first().map(String::as_str) {
         Some("eqr") => {
-            // gen-data eqr <ranges> <out.json> [flops]; the raw sums go to <out.json>.sums.json.
+            // gen-data eqr <ranges> <out.json> [sets of 26 flops]; the per-flop sums go to
+            // <out.json>.flops.json, so the flops can be reweighted later without solving again.
             let ranges = spot_ranges(&args[1]);
             print_ranges(&ranges);
-            let n: usize = args.get(3).map(|s| s.parse().expect("flops")).unwrap_or(30);
-            let flops = gen::sample_flops(n, 2026);
+            let sets: usize = args.get(3).map(|s| s.parse().expect("sets")).unwrap_or(1);
+            let flops = gen::calibration_flops(sets, 2026);
+            let n = flops.len();
+            eprintln!("flops: {}", flops.join(" "));
+            let mut per_flop: Vec<(String, Vec<gen::EqrSums>)> = Vec::new();
             let mut sums = Vec::new();
             for kind in [SRP, THREE_BET] {
-                let mut s = gen::EqrSums::new(gen::spot_config(kind, "Ks7d2c").unwrap().pot);
+                let pot = gen::spot_config(kind, "Ks7d2c").unwrap().pot;
+                let mut total = gen::EqrSums::new(pot);
                 for (i, board) in flops.iter().enumerate() {
                     let t = Instant::now();
+                    let mut s = gen::EqrSums::new(pot);
                     let mut last = String::new();
                     let expl = gen::measure_eqr(kind, board, &ranges, &mut s, |m| last = m.to_string()).expect("solve");
                     eprintln!("eqr {kind} {}/{n} {board}: {expl:.2}% ({:.0}s)", i + 1, t.elapsed().as_secs_f64());
+                    total.add(&s);
+                    match per_flop.iter_mut().find(|f| &f.0 == board) {
+                        Some(f) => f.1.push(s),
+                        None => per_flop.push((board.clone(), vec![s])),
+                    }
+                    write(&format!("{}.flops.json", args[2]), serde_json::to_string(&per_flop).unwrap().as_bytes());
                 }
-                sums.push(s);
+                sums.push(total);
             }
-            std::fs::write(format!("{}.sums.json", args[2]), serde_json::to_string(&sums).unwrap()).expect("write");
             write_eqr(&args[2], &sums[0], &sums[1]);
             eprintln!("eqr: wrote {} ({:.0}s)", args[2], start.elapsed().as_secs_f64());
         }
